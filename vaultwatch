@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+# vaultwatch — честный сторож открытого vault (экосистема Paranoid Tools).
+#
+# Активен ТОЛЬКО пока vault примонтирован: сужает каналы утечки открытого plaintext
+# (Spotlight, Time Machine) и восстанавливает всё при закрытии. Стартует/гаснет из
+# хуков `securetrash vault open/close` (см. install-hooks).
+#
+# ЧЕСТНО: vaultwatch НЕ закрывает swap и НЕ телепортирует данные из облаков — он
+# делает обратимые исключения на время сессии и честно отчитывается о пределах
+# (см. README «Scope & limitations»). Полное ядро — в последующих паках.
+set -euo pipefail
+
+VERSION="0.1.0"
+
+# === BEGIN vendored common (pin: 2e3d2dd5b36251bdcb1a8ffd348b63ece5fa7aab) ===
+# shellcheck shell=bash
+# common.sh — переиспользуемые примитивы экосистемы Paranoid Tools.
+#
+# Канонический источник: securetrash/lib/common.sh. Инструменты экосистемы
+# (vaultwatch/panic/ghostdraft) вендорят его inline между маркерами
+# (см. CLAUDE.md «Vendoring»). Файл sourceable и идемпотентен (двойной source/inline
+# безопасны — guard через if-обёртку, без top-level return, поэтому корректен и когда
+# блок вставлен в исполняемый скрипт).
+#
+# Даёт tool-агностичные примитивы: локаль (ST_LOCALE), цветной вывод (info/warn/err),
+# подтверждение (confirm), детект платформы macOS (require_macos/is_ssd/_disk_kind/
+# filevault_on), канонизацию пути (_abspath). Своя i18n-таблица — у каждого инструмента.
+#
+# ВЕНДОРИНГ — зарезервированные имена (не переопределять в host-скрипте): функции
+# info warn err confirm require_macos is_ssd _disk_kind filevault_on _abspath
+# _st_detect_locale; переменные ST_LOCALE C_RED C_GRN C_YEL C_RST _ST_COMMON_LOADED.
+
+# Идемпотентность через if-обёртку (а не top-level return): безопасно при source,
+# исполнении и inline-вставке. Определения функций внутри if регистрируются глобально.
+if [[ -z "${_ST_COMMON_LOADED:-}" ]]; then
+  _ST_COMMON_LOADED=1
+
+  # --- locale ---
+  # en по умолчанию; ru — если ST_LANG или системная локаль начинаются с 'ru'.
+  _st_detect_locale() {
+    local want="${ST_LANG:-}"
+    if [[ -n "$want" ]]; then
+      case "$want" in ru*) echo ru ;; *) echo en ;; esac
+      return
+    fi
+    local sys="${LC_ALL:-${LANG:-}}"
+    case "$sys" in ru*) echo ru ;; *) echo en ;; esac
+  }
+  # Уважаем заранее выставленный ST_LOCALE (host может переопределить).
+  ST_LOCALE="${ST_LOCALE:-$(_st_detect_locale)}"
+
+  # --- output ---
+  # Цвет только в TTY (в пайпах/файлах — без ANSI).
+  if [[ -t 1 ]]; then
+    C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'; C_RST=$'\033[0m'
+  else
+    C_RED=""; C_GRN=""; C_YEL=""; C_RST=""
+  fi
+  info() { echo "${C_GRN}✓${C_RST} $*"; }
+  warn() { echo "${C_YEL}!${C_RST} $*" >&2; }
+  err()  { echo "${C_RED}✗${C_RST} $*" >&2; }
+
+  # --- confirm ---
+  # Подтверждение необратимой операции. ST_ASSUME_YES=1 обходит вопрос (скрипты/тесты).
+  # Возвращает 0 только при точном вводе 'yes' (EOF/пусто → отказ, fail-closed).
+  # Суффикс намеренно продублирован из i18n securetrash (lib без таблицы строк).
+  confirm() {
+    local prompt="$1" ans suffix
+    [[ "${ST_ASSUME_YES:-0}" == "1" ]] && return 0
+    case "$ST_LOCALE" in ru) suffix="[введите yes]" ;; *) suffix="[type yes]" ;; esac
+    read -r -p "$prompt $suffix: " ans
+    [[ "$ans" == "yes" ]]
+  }
+
+  # --- platform (macOS) ---
+  require_macos() {
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+      case "$ST_LOCALE" in
+        ru) err "работает только на macOS." ;;
+        *)  err "runs on macOS only." ;;
+      esac
+      exit 1
+    fi
+  }
+
+  # Диск под путём — SSD? (diskutil info: "Solid State: Yes")
+  is_ssd() {
+    local path="${1:-/}"
+    diskutil info "$path" 2>/dev/null | grep -qi "Solid State:.*Yes"
+  }
+
+  # Тип диска: ssd | hdd | unknown. Честность важнее догадок: неизвестный тип
+  # НЕ приравниваем к hdd-эффективному (нет поля "Solid State" → unknown).
+  _disk_kind() {
+    local path="${1:-/}" out
+    out="$(diskutil info "$path" 2>/dev/null)"
+    if grep -qi "Solid State:.*Yes" <<<"$out"; then echo ssd
+    elif grep -qi "Solid State:.*No" <<<"$out"; then echo hdd
+    else echo unknown; fi
+  }
+
+  # FileVault включён? (fdesetup status: "FileVault is On.")
+  filevault_on() {
+    fdesetup status 2>/dev/null | grep -qi "FileVault is On"
+  }
+
+  # --- path ---
+  # Физический канонический путь: режет trailing-slash, резолвит .. и симлинки,
+  # ВКЛЮЧАЯ финальный компонент. Непустая строка или код !=0, если путь недоступен.
+  _abspath() {
+    local p="$1"
+    while [[ "$p" == */ && "$p" != "/" ]]; do p="${p%/}"; done
+    if [[ -d "$p" ]]; then
+      ( cd -P -- "$p" 2>/dev/null && pwd -P ); return
+    fi
+    local d b
+    d="$(cd -P -- "$(dirname -- "$p")" 2>/dev/null && pwd -P)" || return 1
+    b="$(basename -- "$p")"
+    printf '%s/%s' "${d%/}" "$b"
+  }
+fi
+# === END vendored common ===
+
+# --- i18n (таблица строк vaultwatch; общие примитивы — в vendored common) ---
+t() {
+  local key="$1"; shift
+  case "$ST_LOCALE:$key" in
+    en:usage)
+      cat <<'EOF'
+Usage: vaultwatch <command> [args]
+
+Commands:
+  install-hooks       Wire vaultwatch into securetrash vault open/close
+  uninstall-hooks     Remove vaultwatch hooks (only those it manages)
+  version             Show the version
+
+Hooks live in ${ST_HOOK_DIR:-~/.securetrash/hooks} and are invoked by securetrash.
+EOF
+      ;;
+    ru:usage)
+      cat <<'EOF'
+Usage: vaultwatch <command> [args]
+
+Commands:
+  install-hooks       Подключить vaultwatch к securetrash vault open/close
+  uninstall-hooks     Удалить хуки vaultwatch (только свои, managed)
+  version             Показать версию
+
+Хуки лежат в ${ST_HOOK_DIR:-~/.securetrash/hooks} и вызываются securetrash.
+EOF
+      ;;
+    en:hooks_installed)  printf 'Hooks installed in %s (post-open, post-close).' "$1" ;;
+    ru:hooks_installed)  printf 'Хуки установлены в %s (post-open, post-close).' "$1" ;;
+    en:hook_skip_foreign) printf 'Skipped %s: exists and is not managed by vaultwatch (left untouched).' "$1" ;;
+    ru:hook_skip_foreign) printf 'Пропуск %s: существует и не управляется vaultwatch (не трогаю).' "$1" ;;
+    en:hooks_removed)    printf 'Removed managed hooks from %s.' "$1" ;;
+    ru:hooks_removed)    printf 'Удалены managed-хуки из %s.' "$1" ;;
+    en:hook_skip_rm)     printf 'Skipped %s: not managed by vaultwatch.' "$1" ;;
+    ru:hook_skip_rm)     printf 'Пропуск %s: не управляется vaultwatch.' "$1" ;;
+    en:unknown_cmd)      printf 'Unknown command: %s' "$1" ;;
+    ru:unknown_cmd)      printf 'Unknown command: %s' "$1" ;;
+    *) echo "$key" ;;
+  esac
+}
+
+usage() { t usage; }
+
+# Каталог хуков — тот же, что читает securetrash (общий контракт экосистемы).
+ST_HOOK_DIR="${ST_HOOK_DIR:-${HOME}/.securetrash/hooks}"
+
+# Сигнатура managed-хука: по ней отличаем свои хуки от пользовательских.
+HOOK_SIGNATURE="# managed-by: vaultwatch"
+
+# Абсолютный путь к этому скрипту (вшиваем в хуки, чтобы не зависеть от PATH).
+_self_path() {
+  local src="${BASH_SOURCE[0]}"
+  local dir
+  dir="$(cd -P -- "$(dirname -- "$src")" 2>/dev/null && pwd -P)" || { printf '%s' "$src"; return; }
+  printf '%s/%s' "$dir" "$(basename -- "$src")"
+}
+
+# Записать один managed-хук, не затирая чужой (без нашей сигнатуры).
+_write_hook() {
+  local name="$1" action="$2" self="$3"
+  local path="${ST_HOOK_DIR}/${name}"
+  if [[ -e "$path" ]] && ! grep -qF "$HOOK_SIGNATURE" "$path" 2>/dev/null; then
+    warn "$(t hook_skip_foreign "$path")"
+    return 0
+  fi
+  # Экранируем путь до shell-литерала: устойчиво к пробелам/кавычкам/$ в пути.
+  local qself; printf -v qself '%q' "$self"
+  cat > "$path" <<EOF
+#!/usr/bin/env bash
+${HOOK_SIGNATURE}
+# Вызывается securetrash vault ${name#post-}. \$1 = точка монтирования.
+exec ${qself} ${action} "\$@"
+EOF
+  chmod +x "$path"
+}
+
+cmd_install_hooks() {
+  require_macos
+  mkdir -p "$ST_HOOK_DIR"
+  local self; self="$(_self_path)"
+  _write_hook post-open  start "$self"
+  _write_hook post-close stop  "$self"
+  info "$(t hooks_installed "$ST_HOOK_DIR")"
+}
+
+cmd_uninstall_hooks() {
+  local name path removed=0
+  for name in post-open post-close; do
+    path="${ST_HOOK_DIR}/${name}"
+    [[ -e "$path" ]] || continue
+    if grep -qF "$HOOK_SIGNATURE" "$path" 2>/dev/null; then
+      rm -f "$path"; removed=1
+    else
+      warn "$(t hook_skip_rm "$path")"
+    fi
+  done
+  if [[ "$removed" == "1" ]]; then info "$(t hooks_removed "$ST_HOOK_DIR")"; fi
+  return 0
+}
+
+cmd_version() { echo "vaultwatch $VERSION"; }
+
+main() {
+  local cmd="${1:-}"
+  if [[ -z "$cmd" ]]; then usage; exit 1; fi
+  shift || true
+  case "$cmd" in
+    install-hooks)   cmd_install_hooks "$@" ;;
+    uninstall-hooks) cmd_uninstall_hooks "$@" ;;
+    version)         cmd_version "$@" ;;
+    # start/stop — ядро сторожа, реализуется в следующем паке (3b).
+    start|stop)      err "vaultwatch: '$cmd' пока не реализован (pack 3b)"; exit 2 ;;
+    *) t unknown_cmd "$cmd" >&2; echo >&2; usage >&2; exit 1 ;;
+  esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

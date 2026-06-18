@@ -1,0 +1,15 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: brew install bats-core shellcheck
+      - name: Lint
+        run: shellcheck vaultwatch tools/vendor-common.sh
+      - name: Vendored common is in sync with pinned securetrash
+        run: ./tools/vendor-common.sh --check
+      - name: Unit tests
+        run: bats test/
