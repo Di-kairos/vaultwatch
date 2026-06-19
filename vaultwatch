@@ -281,6 +281,9 @@ cmd_uninstall_hooks() {
 # чтобы stop восстановил РОВНО то, что менял start (а не «всё подряд»).
 VW_STATE_DIR="${VW_STATE_DIR:-${HOME}/.vaultwatch/sessions}"
 
+# Каталог LaunchAgents для --ttl-таймера (launchd-managed). Переопределяем в тестах.
+VW_LAUNCH_DIR="${VW_LAUNCH_DIR:-${HOME}/Library/LaunchAgents}"
+
 # Известные cloud-демоны: "имя_процесса|метка|синк-папка[:ещё-папка]".
 # pgrep -x ищет точное имя процесса; папки — для эвристики inside/outside.
 # Honest: это эвристика (демоны/папки меняются), не телепатия — так и отчитываемся.
@@ -359,6 +362,66 @@ _parse_duration() {
   esac
 }
 
+# --- launchd-таймер для --ttl (pack 3d) ------------------------------------
+# Одноразовый job: RunAtLoad=true → при загрузке стартует, спит ttl_secs,
+# вызывает `_ttl_fire <mount>` и завершается (KeepAlive отсутствует → не
+# перезапускается). launchd-managed: виден в `launchctl list`, переживает
+# выход родительской оболочки, чисто снимается через bootout.
+
+_ttl_label()      { printf 'com.vaultwatch.ttl.%s' "$(printf '%s' "$1" | tr -c 'a-zA-Z0-9' '_')"; }
+_ttl_plist_path() { printf '%s/%s.plist' "$VW_LAUNCH_DIR" "$(_ttl_label "$1")"; }
+_ttl_domain()     { printf 'gui/%s' "$(id -u)"; }
+
+# Минимальное XML-экранирование для путей внутри plist.
+_xml_escape() {
+  local s="$1"
+  s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; s="${s//\"/&quot;}"
+  printf '%s' "$s"
+}
+
+# Записать + загрузить LaunchAgent; печатает Label (для записи в state).
+_ttl_schedule() {
+  local mount="$1" secs="$2" label plist self
+  label="$(_ttl_label "$mount")"
+  plist="$(_ttl_plist_path "$mount")"
+  self="$(_self_path)"
+  mkdir -p "$VW_LAUNCH_DIR"
+  # ProgramArguments: bash -c с позиционными $1/$2/$3 — спокойно к пробелам в пути.
+  cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$(_xml_escape "$label")</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>sleep "\$1"; exec "\$2" _ttl_fire "\$3"</string>
+    <string>vaultwatch-ttl</string>
+    <string>$(_xml_escape "$secs")</string>
+    <string>$(_xml_escape "$self")</string>
+    <string>$(_xml_escape "$mount")</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
+EOF
+  local dom; dom="$(_ttl_domain)"
+  launchctl bootout "$dom" "$plist" >/dev/null 2>&1 || true   # снять возможный stale
+  launchctl bootstrap "$dom" "$plist" >/dev/null 2>&1 || true
+  printf '%s' "$label"
+}
+
+# Снять LaunchAgent (bootout) и удалить plist. Идемпотентно.
+_ttl_remove() {
+  local mount="$1" plist dom
+  plist="$(_ttl_plist_path "$mount")"
+  dom="$(_ttl_domain)"
+  launchctl bootout "$dom" "$plist" >/dev/null 2>&1 || true
+  rm -f "$plist"
+}
+
 cmd_start() {
   require_macos
   local ttl_secs=0 ttl_force=0 raw=""
@@ -402,16 +465,11 @@ cmd_start() {
     printf 'ttl_force=%s\n' "$ttl_force"
   } > "$sf"
 
-  # Авто-выход по таймеру: фоновый one-shot (sleep → _ttl_fire). VW_NO_SPAWN=1
-  # в тестах подавляет реальный sleep. PID кладём в state, чтобы stop отменил таймер.
+  # Авто-выход по таймеру через launchd LaunchAgent. VW_NO_SPAWN=1 подавляет
+  # реальную загрузку (юнит-тесты состояния). Label кладём в state — stop снимет.
   if [[ "$ttl_secs" -gt 0 && "${VW_NO_SPAWN:-0}" != "1" ]]; then
-    local self; self="$(_self_path)"
-    # $1/$2/$3 — позиционные параметры внутреннего bash (не host-expansion), single-quote намеренно.
-    # shellcheck disable=SC2016
-    nohup bash -c 'sleep "$1"; "$2" _ttl_fire "$3"' _ "$ttl_secs" "$self" "$mount" \
-      >/dev/null 2>&1 &
-    printf 'ttl_pid=%s\n' "$!" >> "$sf"
-    disown 2>/dev/null || true
+    local label; label="$(_ttl_schedule "$mount" "$ttl_secs")"
+    printf 'ttl_label=%s\n' "$label" >> "$sf"
   fi
 
   info "$(t watching "$mount")"
@@ -441,18 +499,19 @@ cmd_stop() {
   fi
 
   # Читаем состояние сессии (parse, не source — shellcheck-clean и безопаснее).
-  local started=0 spot_was=unknown tm_added=0 ttl_pid="" k v
+  local started=0 spot_was=unknown tm_added=0 ttl_label="" k v
   while IFS='=' read -r k v; do
     case "$k" in
       started)       started="$v" ;;
       spotlight_was) spot_was="$v" ;;
       tm_added)      tm_added="$v" ;;
-      ttl_pid)       ttl_pid="$v" ;;
+      ttl_label)     ttl_label="$v" ;;
     esac
   done < "$sf"
 
-  # Отменяем таймер авто-выхода, если он ещё жив (vault закрыт вручную раньше TTL).
-  [[ -n "$ttl_pid" ]] && kill "$ttl_pid" 2>/dev/null || true
+  # Снимаем launchd-таймер авто-выхода (vault закрыт вручную раньше TTL, либо
+  # это вызов из самого _ttl_fire — bootout своего же job безопасен).
+  [[ -n "$ttl_label" ]] && _ttl_remove "$mount"
 
   # Восстанавливаем РОВНО то, что меняли.
   [[ "$spot_was" == "enabled" ]] && mdutil -i on "$mount" >/dev/null 2>&1 || true

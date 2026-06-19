@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Стаб launchctl. Логирует вызов в $VW_STUB_LOG; всегда успех (job не запускается).
+printf 'launchctl %s\n' "$*" >>"${VW_STUB_LOG:-/dev/null}"
+exit 0

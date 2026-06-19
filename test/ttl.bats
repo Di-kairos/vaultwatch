@@ -9,10 +9,11 @@ setup() {
   mkdir -p "$TMP/Vault"
   MOUNT="$(cd "$TMP/Vault" && pwd -P)"
   export VW_STATE_DIR="$TMP/state"
+  export VW_LAUNCH_DIR="$TMP/agents"
   export VW_STUB_LOG="$TMP/calls.log"
   export PATH="$STUBS:$PATH"
   export ST_ASSUME_YES=1
-  export VW_NO_SPAWN=1   # не плодить реальный sleep-таймер в тестах
+  export VW_NO_SPAWN=1   # по умолчанию не грузить launchd-таймер (юнит-тесты состояния)
   unset ST_LANG
 }
 
@@ -104,15 +105,38 @@ run_vw() { run env PATH="$STUBS:$PATH" bash "$SCRIPT" "$@"; }
   ! grep -q "detach" "$VW_STUB_LOG"
 }
 
-# --- stop cancels the timer ---
+# --- launchd-таймер (pack 3d): schedule / cancel ---
 
-@test "stop kills a live ttl timer process" {
-  bash "$SCRIPT" start "$MOUNT" >/dev/null
-  sleep 60 &                       # фейковый таймер
-  pid=$!
-  sf="$(ls "$VW_STATE_DIR"/*)"
-  printf 'ttl_pid=%s\n' "$pid" >> "$sf"
+@test "start --ttl writes and bootstraps a LaunchAgent (real schedule path)" {
+  VW_NO_SPAWN=0 run_vw start --ttl 30m "$MOUNT"
+  [ "$status" -eq 0 ]
+  ls "$VW_LAUNCH_DIR"/com.vaultwatch.ttl.*.plist >/dev/null 2>&1   # plist записан
+  grep -q "bootstrap" "$VW_STUB_LOG"                               # launchctl загрузил
+  run cat "$VW_STATE_DIR"/*
+  [[ "$output" == *"ttl_label=com.vaultwatch.ttl."* ]]
+}
+
+@test "LaunchAgent plist references _ttl_fire with the mountpoint" {
+  VW_NO_SPAWN=0 run_vw start --ttl 10m "$MOUNT"
+  [ "$status" -eq 0 ]
+  run cat "$VW_LAUNCH_DIR"/com.vaultwatch.ttl.*.plist
+  [[ "$output" == *"_ttl_fire"* ]]
+  [[ "$output" == *"$MOUNT"* ]]
+  [[ "$output" == *"RunAtLoad"* ]]
+}
+
+@test "stop removes the scheduled LaunchAgent" {
+  VW_NO_SPAWN=0 bash "$SCRIPT" start --ttl 30m "$MOUNT" >/dev/null
+  ls "$VW_LAUNCH_DIR"/com.vaultwatch.ttl.*.plist >/dev/null 2>&1   # есть до stop
   run_vw stop "$MOUNT"
   [ "$status" -eq 0 ]
-  ! kill -0 "$pid" 2>/dev/null     # таймер убит
+  ! ls "$VW_LAUNCH_DIR"/com.vaultwatch.ttl.*.plist >/dev/null 2>&1 # plist снят
+  grep -q "bootout" "$VW_STUB_LOG"                                 # launchctl выгрузил
+}
+
+@test "ttl fire removes its own LaunchAgent after detach" {
+  VW_NO_SPAWN=0 bash "$SCRIPT" start --ttl 30m "$MOUNT" >/dev/null
+  STUB_LSOF_BUSY=0 run_vw _ttl_fire "$MOUNT"
+  [ "$status" -eq 0 ]
+  ! ls "$VW_LAUNCH_DIR"/com.vaultwatch.ttl.*.plist >/dev/null 2>&1
 }

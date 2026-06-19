@@ -8,8 +8,8 @@
 
 > **Статус: ранний (v0.1.0, work in progress).** Готовы интеграция (хуки + вендоринг),
 > **сторожевое ядро `start`/`stop`** (Spotlight off, Time Machine exclude, cloud-detect,
-> session report) и **авто-выход `--ttl`**. Фоновый режим через `launchd` LaunchAgent —
-> в следующем паке (сейчас `--ttl` держит таймер фоновым процессом сессии).
+> session report) и **авто-выход `--ttl`** через **launchd LaunchAgent** (managed-таймер,
+> виден в `launchctl list`, чисто снимается через bootout).
 
 ## Использование
 
@@ -20,11 +20,13 @@ vaultwatch install-hooks                        # подключить к secure
 vaultwatch uninstall-hooks                      # убрать (только свои managed-хуки)
 ```
 
-`--ttl D` — авто-detach тома через `D` (`30m`, `2h`, `45s`, `1d` или голые секунды):
-по истечении vaultwatch проверяет открытые файлы (`lsof`) и, если их нет, размонтирует
-том и восстанавливает состояние. Если файлы открыты — **честно не трогает** том и
-предупреждает; `--force` форсирует `hdiutil detach -force` (с подтверждением, риск
-потери данных). `stop` (ручное закрытие раньше TTL) отменяет таймер.
+`--ttl D` — авто-detach тома через `D` (`30m`, `2h`, `45s`, `1d` или голые секунды).
+Таймер ставится как **launchd LaunchAgent** (`~/Library/LaunchAgents/com.vaultwatch.ttl.*.plist`,
+`RunAtLoad` → спит `D` → дёргает `vaultwatch _ttl_fire <mount>`). По истечении vaultwatch
+проверяет открытые файлы (`lsof`) и, если их нет, размонтирует том (`hdiutil detach`) и
+восстанавливает состояние. Если файлы открыты — **честно не трогает** том и предупреждает;
+`--force` форсирует `hdiutil detach -force` (с подтверждением, риск потери данных).
+`stop` (ручное закрытие раньше TTL) снимает LaunchAgent (`bootout` + удаление plist).
 
 `start` запоминает прежнее состояние и сужает каналы утечки; `stop` восстанавливает
 **ровно то, что менял** `start` (если Spotlight был уже выключен или vault уже исключён
