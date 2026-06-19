@@ -1,0 +1,158 @@
+# Тесты ядра сторожа vaultwatch (pack 3b: start/stop, mdutil/tmutil, cloud, report).
+# Системные команды macOS подменяются стабами через PATH (test/stubs), поэтому
+# тесты детерминированно гоняются и на Linux-CI, где mdutil/tmutil отсутствуют.
+
+setup() {
+  SCRIPT="${BATS_TEST_DIRNAME}/../vaultwatch"
+  STUBS="${BATS_TEST_DIRNAME}/stubs"
+  TMP="$(mktemp -d)"
+  mkdir -p "$TMP/Vault"
+  # Канонический физический путь (mktemp под /var → симлинк на /private/var на macOS);
+  # vaultwatch канонизирует mount, поэтому сверяем по тому же виду пути.
+  MOUNT="$(cd "$TMP/Vault" && pwd -P)"
+  export VW_STATE_DIR="$TMP/state"
+  export VW_STUB_LOG="$TMP/calls.log"
+  export PATH="$STUBS:$PATH"
+  export ST_ASSUME_YES=1
+  unset ST_LANG
+}
+
+teardown() { rm -rf "$TMP"; }
+
+run_vw() { run env PATH="$STUBS:$PATH" bash "$SCRIPT" "$@"; }
+
+# --- start: валидация ---
+
+@test "start without mountpoint errors and exits non-zero" {
+  run_vw start
+  [ "$status" -ne 0 ]
+}
+
+@test "start on a non-existent path errors" {
+  run_vw start "$TMP/nope"
+  [ "$status" -ne 0 ]
+}
+
+# --- start: Spotlight ---
+
+@test "start disables Spotlight indexing for the mount" {
+  run_vw start "$MOUNT"
+  [ "$status" -eq 0 ]
+  grep -qF -- "-i off $MOUNT" "$VW_STUB_LOG"
+}
+
+@test "start records Spotlight prior state in session file" {
+  STUB_SPOTLIGHT=enabled run_vw start "$MOUNT"
+  [ "$status" -eq 0 ]
+  run cat "$VW_STATE_DIR"/*
+  [[ "$output" == *"spotlight_was=enabled"* ]]
+}
+
+# --- start: Time Machine ---
+
+@test "start adds TM exclusion when mount is not already excluded" {
+  STUB_TM_EXCLUDED=0 run_vw start "$MOUNT"
+  [ "$status" -eq 0 ]
+  grep -qF -- "addexclusion $MOUNT" "$VW_STUB_LOG"
+}
+
+@test "start does NOT add TM exclusion when already excluded" {
+  STUB_TM_EXCLUDED=1 run_vw start "$MOUNT"
+  [ "$status" -eq 0 ]
+  ! grep -qF -- "addexclusion $MOUNT" "$VW_STUB_LOG"
+  run cat "$VW_STATE_DIR"/*
+  [[ "$output" == *"tm_added=0"* ]]
+}
+
+# --- start: cloud detect ---
+
+@test "start reports an active cloud daemon" {
+  STUB_CLOUD_PROCS="Dropbox" run_vw start "$MOUNT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Dropbox"* ]]
+}
+
+@test "start with no cloud daemons does not invent one" {
+  STUB_CLOUD_PROCS="" run_vw start "$MOUNT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Dropbox"* ]]
+}
+
+@test "start writes a session state file for the mount" {
+  run_vw start "$MOUNT"
+  [ "$status" -eq 0 ]
+  [ -n "$(ls -A "$VW_STATE_DIR" 2>/dev/null)" ]
+}
+
+# --- stop: валидация / идемпотентность ---
+
+@test "stop without mountpoint errors and exits non-zero" {
+  run_vw stop
+  [ "$status" -ne 0 ]
+}
+
+@test "stop with no active session is a quiet success" {
+  run_vw stop "$MOUNT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no active"* ]] || [[ "$output" == *"нет активной"* ]]
+}
+
+# --- stop: Spotlight restore ---
+
+@test "stop re-enables Spotlight when it was on before the session" {
+  STUB_SPOTLIGHT=enabled bash "$SCRIPT" start "$MOUNT" >/dev/null
+  run_vw stop "$MOUNT"
+  [ "$status" -eq 0 ]
+  grep -qF -- "-i on $MOUNT" "$VW_STUB_LOG"
+}
+
+@test "stop does NOT re-enable Spotlight when it was already off" {
+  STUB_SPOTLIGHT=disabled bash "$SCRIPT" start "$MOUNT" >/dev/null
+  run_vw stop "$MOUNT"
+  [ "$status" -eq 0 ]
+  ! grep -qF -- "-i on $MOUNT" "$VW_STUB_LOG"
+}
+
+# --- stop: Time Machine restore ---
+
+@test "stop removes TM exclusion that the session added" {
+  STUB_TM_EXCLUDED=0 bash "$SCRIPT" start "$MOUNT" >/dev/null
+  run_vw stop "$MOUNT"
+  [ "$status" -eq 0 ]
+  grep -qF -- "removeexclusion $MOUNT" "$VW_STUB_LOG"
+}
+
+@test "stop does NOT remove a TM exclusion it did not add" {
+  STUB_TM_EXCLUDED=1 bash "$SCRIPT" start "$MOUNT" >/dev/null
+  run_vw stop "$MOUNT"
+  [ "$status" -eq 0 ]
+  ! grep -qF -- "removeexclusion $MOUNT" "$VW_STUB_LOG"
+}
+
+# --- stop: session report ---
+
+@test "stop prints a session report with duration and swap honesty" {
+  bash "$SCRIPT" start "$MOUNT" >/dev/null
+  run_vw stop "$MOUNT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"session report"* ]]
+  [[ "$output" == *"duration"* ]] || [[ "$output" == *"длительность"* ]]
+  [[ "$output" == *"swap"* ]]
+}
+
+@test "stop reports local snapshots when present (honesty)" {
+  bash "$SCRIPT" start "$MOUNT" >/dev/null
+  STUB_SNAPSHOTS="2026-06-19-120000" run_vw stop "$MOUNT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"snapshots"* ]]
+  [[ "$output" == *"limitations"* ]]
+}
+
+# --- stop: cleanup ---
+
+@test "stop removes the session state file" {
+  bash "$SCRIPT" start "$MOUNT" >/dev/null
+  run_vw stop "$MOUNT"
+  [ "$status" -eq 0 ]
+  [ -z "$(ls -A "$VW_STATE_DIR" 2>/dev/null)" ]
+}

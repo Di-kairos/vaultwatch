@@ -1,6 +1,7 @@
 # Тесты vaultwatch (pack 3a: вендоринг + hook-installer).
 setup() {
   SCRIPT="${BATS_TEST_DIRNAME}/../vaultwatch"
+  STUBS="${BATS_TEST_DIRNAME}/stubs"   # uname→Darwin и пр., чтобы тесты шли и на Linux-CI
 }
 
 @test "version prints semver" {
@@ -77,30 +78,23 @@ setup() {
   rm -rf "$tmp"
 }
 
-@test "installed post-open hook execs vaultwatch start with mountpoint" {
+@test "installed post-open hook forwards the mountpoint to start" {
   tmp="$(mktemp -d)"; hooks="$tmp/hooks"
   env ST_HOOK_DIR="$hooks" bash "$SCRIPT" install-hooks
-  # хук вызывает start с аргументом; start ещё не реализован (pack 3b) → код 2,
-  # но это доказывает корректную диспетчеризацию аргумента в vaultwatch.
-  run bash "$hooks/post-open" /Volumes/SecretVault
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"start"* ]]
+  # Хук дёргает `vaultwatch start <mount>`. Несуществующий путь → start падает
+  # (mount not found, exit 1) с этим путём в сообщении — доказывает проброс аргумента.
+  run env PATH="$STUBS:$PATH" bash "$hooks/post-open" /Volumes/NoSuchVault
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"/Volumes/NoSuchVault"* ]]
   rm -rf "$tmp"
-}
-
-@test "start/stop are deferred (exit 2) — pack 3a/3b boundary" {
-  run bash "$SCRIPT" start /Volumes/SecretVault
-  [ "$status" -eq 2 ]
-  run bash "$SCRIPT" stop /Volumes/SecretVault
-  [ "$status" -eq 2 ]
 }
 
 @test "installed post-open hook preserves a mountpoint with spaces" {
   tmp="$(mktemp -d)"; hooks="$tmp/hooks"
   env ST_HOOK_DIR="$hooks" bash "$SCRIPT" install-hooks
-  run bash "$hooks/post-open" "/Volumes/Secret Vault"
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"start"* ]]
+  run env PATH="$STUBS:$PATH" bash "$hooks/post-open" "/Volumes/Secret Vault"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"/Volumes/Secret Vault"* ]]   # пробелы в пути сохранены сквозь хук
   rm -rf "$tmp"
 }
 

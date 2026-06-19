@@ -130,10 +130,13 @@ t() {
 Usage: vaultwatch <command> [args]
 
 Commands:
+  start <mount>       Guard an open vault (Spotlight off, TM exclude, cloud check)
+  stop <mount>        Restore everything and print a session report
   install-hooks       Wire vaultwatch into securetrash vault open/close
   uninstall-hooks     Remove vaultwatch hooks (only those it manages)
   version             Show the version
 
+start/stop are normally invoked by the securetrash vault open/close hooks.
 Hooks live in ${ST_HOOK_DIR:-~/.securetrash/hooks} and are invoked by securetrash.
 EOF
       ;;
@@ -142,10 +145,13 @@ EOF
 Usage: vaultwatch <command> [args]
 
 Commands:
+  start <mount>       Сторожить открытый vault (Spotlight off, TM exclude, cloud-чек)
+  stop <mount>        Восстановить всё и показать session report
   install-hooks       Подключить vaultwatch к securetrash vault open/close
   uninstall-hooks     Удалить хуки vaultwatch (только свои, managed)
   version             Показать версию
 
+start/stop обычно вызываются хуками securetrash vault open/close.
 Хуки лежат в ${ST_HOOK_DIR:-~/.securetrash/hooks} и вызываются securetrash.
 EOF
       ;;
@@ -159,6 +165,38 @@ EOF
     ru:hook_skip_rm)     printf 'Пропуск %s: не управляется vaultwatch.' "$1" ;;
     en:unknown_cmd)      printf 'Unknown command: %s' "$1" ;;
     ru:unknown_cmd)      printf 'Unknown command: %s' "$1" ;;
+    en:need_mount)       echo 'this command needs a mountpoint argument.' ;;
+    ru:need_mount)       echo 'команде нужен аргумент — точка монтирования.' ;;
+    en:mount_missing)    printf 'mountpoint not found: %s' "$1" ;;
+    ru:mount_missing)    printf 'точка монтирования не найдена: %s' "$1" ;;
+    en:watching)         printf 'watching %s (Spotlight off, Time Machine excluded).' "$1" ;;
+    ru:watching)         printf 'слежу за %s (Spotlight off, исключён из Time Machine).' "$1" ;;
+    en:cloud_outside)    printf '%s active — vault is OUTSIDE its sync folder' "$1" ;;
+    ru:cloud_outside)    printf '%s активен — vault ВНЕ его синк-папки' "$1" ;;
+    en:cloud_inside)     printf '%s active — vault is INSIDE its sync folder (!)' "$1" ;;
+    ru:cloud_inside)     printf '%s активен — vault ВНУТРИ его синк-папки (!)' "$1" ;;
+    en:no_session)       printf 'no active vaultwatch session for %s (nothing to restore).' "$1" ;;
+    ru:no_session)       printf 'нет активной сессии vaultwatch для %s (нечего восстанавливать).' "$1" ;;
+    en:rep_header)       echo 'vaultwatch — session report' ;;
+    ru:rep_header)       echo 'vaultwatch — session report' ;;
+    en:rep_duration)     printf '  duration:        %s' "$1" ;;
+    ru:rep_duration)     printf '  длительность:    %s' "$1" ;;
+    en:rep_spot_on)      printf '  Spotlight:       indexing re-enabled for %s' "$1" ;;
+    ru:rep_spot_on)      printf '  Spotlight:       индексация снова включена для %s' "$1" ;;
+    en:rep_spot_keep)    echo '  Spotlight:       was already OFF before session — left OFF' ;;
+    ru:rep_spot_keep)    echo '  Spotlight:       была выключена до сессии — оставлена OFF' ;;
+    en:rep_tm_removed)   echo '  Time Machine:    exclusion removed (added by this session)' ;;
+    ru:rep_tm_removed)   echo '  Time Machine:    исключение снято (добавляла эта сессия)' ;;
+    en:rep_tm_keep)      echo '  Time Machine:    was already excluded before session — left as-is' ;;
+    ru:rep_tm_keep)      echo '  Time Machine:    было исключено до сессии — оставлено как есть' ;;
+    en:rep_cloud_none)   echo '  cloud daemons:   none active' ;;
+    ru:rep_cloud_none)   echo '  cloud daemons:   активных нет' ;;
+    en:rep_snap_none)    echo '  local snapshots: none observed (tmutil listlocalsnapshots /)' ;;
+    ru:rep_snap_none)    echo '  local snapshots: не обнаружено (tmutil listlocalsnapshots /)' ;;
+    en:rep_snap_some)    printf '  local snapshots: %s present — addexclusion does NOT delete them (see limitations)' "$1" ;;
+    ru:rep_snap_some)    printf '  local snapshots: есть (%s) — addexclusion их НЕ удаляет (см. limitations)' "$1" ;;
+    en:rep_swap)         echo '  swap:            NOT addressed (see limitations)' ;;
+    ru:rep_swap)         echo '  swap:            не затрагивается (см. limitations)' ;;
     *) echo "$key" ;;
   esac
 }
@@ -223,6 +261,165 @@ cmd_uninstall_hooks() {
   return 0
 }
 
+# --- ядро сторожа (pack 3b): start / stop ----------------------------------
+
+# Каталог состояния сессий. Каждая открытая сессия = один файл (key=value),
+# чтобы stop восстановил РОВНО то, что менял start (а не «всё подряд»).
+VW_STATE_DIR="${VW_STATE_DIR:-${HOME}/.vaultwatch/sessions}"
+
+# Известные cloud-демоны: "имя_процесса|метка|синк-папка[:ещё-папка]".
+# pgrep -x ищет точное имя процесса; папки — для эвристики inside/outside.
+# Honest: это эвристика (демоны/папки меняются), не телепатия — так и отчитываемся.
+_cloud_table() {
+  cat <<EOF
+Dropbox|Dropbox|${HOME}/Dropbox
+OneDrive|OneDrive|${HOME}/OneDrive:${HOME}/Library/CloudStorage/OneDrive
+bird|iCloud Drive|${HOME}/Library/Mobile Documents:${HOME}/Library/CloudStorage/iCloud
+Google Drive|Google Drive|${HOME}/Library/CloudStorage/GoogleDrive:${HOME}/Google Drive
+EOF
+}
+
+# Путь к state-файлу сессии для данной точки монтирования.
+# Имя файла — санитизированный mount (collision-устойчивость не критична:
+# реально открытых vault единицы, оригинал хранится внутри файла).
+_state_file() {
+  local mount="$1" safe
+  safe="$(printf '%s' "$mount" | tr -c 'a-zA-Z0-9' '_')"
+  printf '%s/%s' "$VW_STATE_DIR" "$safe"
+}
+
+# child лежит внутри parent? (оба уже канонизированы) — точное совпадение или префикс с '/'.
+_is_inside() {
+  local child="$1" parent="$2"
+  [[ "$child" == "$parent" || "$child" == "$parent/"* ]]
+}
+
+# Cloud-детект (только детект): по строке на активный демон в виде "SEV\tТекст",
+# SEV = ok|warn (warn = vault ВНУТРИ синк-папки — риск утечки). «Честно про
+# эвристику»: смотрим запущенные процессы + расположение папок, не телепатия.
+_cloud_lines() {
+  local mount="$1" proc label folders f inside cf
+  while IFS='|' read -r proc label folders; do
+    [[ -n "$proc" ]] || continue
+    pgrep -x "$proc" >/dev/null 2>&1 || continue
+    inside=0
+    IFS=':' read -ra _f <<<"$folders"
+    for f in "${_f[@]}"; do
+      [[ -n "$f" ]] || continue
+      cf="$(_abspath "$f" 2>/dev/null)" || continue
+      if _is_inside "$mount" "$cf"; then inside=1; break; fi
+    done
+    if [[ "$inside" == "1" ]]; then printf 'warn\t%s\n' "$(t cloud_inside "$label")"
+    else printf 'ok\t%s\n' "$(t cloud_outside "$label")"; fi
+  done < <(_cloud_table)
+}
+
+# Презентация cloud-детекта для `start`: ok→info, warn→warn.
+_report_cloud_start() {
+  local sev text
+  while IFS=$'\t' read -r sev text; do
+    [[ -n "$text" ]] || continue
+    if [[ "$sev" == "warn" ]]; then warn "$text"; else info "$text"; fi
+  done < <(_cloud_lines "$1")
+}
+
+# Аргумент-точка монтирования: валиден и канонизирован, или выход с ошибкой.
+_require_mount() {
+  local raw="${1:-}" canon
+  if [[ -z "$raw" ]]; then err "$(t need_mount)"; exit 1; fi
+  if [[ ! -d "$raw" ]]; then err "$(t mount_missing "$raw")"; exit 1; fi
+  canon="$(_abspath "$raw")" || { err "$(t mount_missing "$raw")"; exit 1; }
+  printf '%s' "$canon"
+}
+
+cmd_start() {
+  require_macos
+  local mount; mount="$(_require_mount "${1:-}")"
+
+  # Spotlight: запоминаем предыдущее состояние, затем выключаем индексацию.
+  local spot_was=unknown
+  if mdutil -s "$mount" 2>/dev/null | grep -qi "Indexing enabled"; then
+    spot_was=enabled
+  elif mdutil -s "$mount" 2>/dev/null | grep -qi "Indexing disabled"; then
+    spot_was=disabled
+  fi
+  mdutil -i off "$mount" >/dev/null 2>&1 || true
+
+  # Time Machine: исключаем, только если ещё не исключён (иначе при stop не трогаем).
+  local tm_added=0
+  if tmutil isexcluded "$mount" 2>/dev/null | grep -qi "\[Included\]"; then
+    tmutil addexclusion "$mount" >/dev/null 2>&1 && tm_added=1
+  fi
+
+  # Состояние сессии — чтобы stop восстановил ровно изменённое.
+  mkdir -p "$VW_STATE_DIR"
+  local sf; sf="$(_state_file "$mount")"
+  {
+    printf 'mount=%s\n' "$mount"
+    printf 'started=%s\n' "$(date +%s)"
+    printf 'spotlight_was=%s\n' "$spot_was"
+    printf 'tm_added=%s\n' "$tm_added"
+  } > "$sf"
+
+  info "$(t watching "$mount")"
+  _report_cloud_start "$mount"
+}
+
+# Секунды → человекочитаемая длительность ("Hh Mm Ss" / "Mm Ss").
+_fmt_duration() {
+  local s="$1" h m
+  h=$((s / 3600)); m=$(((s % 3600) / 60)); s=$((s % 60))
+  if (( h > 0 )); then printf '%dh %dm %ds' "$h" "$m" "$s"
+  else printf '%dm %ds' "$m" "$s"; fi
+}
+
+cmd_stop() {
+  require_macos
+  local raw="${1:-}"
+  if [[ -z "$raw" ]]; then err "$(t need_mount)"; exit 1; fi
+  # На close vault уже размонтирован — каталог может не существовать; НЕ требуем -d.
+  # ASSUMPTION: путь без симлинков (типично для /Volumes/X) → ключ совпадёт со start.
+  local mount; mount="$(_abspath "$raw" 2>/dev/null || printf '%s' "$raw")"
+  local sf; sf="$(_state_file "$mount")"
+  if [[ ! -f "$sf" ]]; then
+    warn "$(t no_session "$mount")"
+    return 0
+  fi
+
+  # Читаем состояние сессии (parse, не source — shellcheck-clean и безопаснее).
+  local started=0 spot_was=unknown tm_added=0 k v
+  while IFS='=' read -r k v; do
+    case "$k" in
+      started)       started="$v" ;;
+      spotlight_was) spot_was="$v" ;;
+      tm_added)      tm_added="$v" ;;
+    esac
+  done < "$sf"
+
+  # Восстанавливаем РОВНО то, что меняли.
+  [[ "$spot_was" == "enabled" ]] && mdutil -i on "$mount" >/dev/null 2>&1 || true
+  [[ "$tm_added" == "1" ]] && tmutil removeexclusion "$mount" >/dev/null 2>&1 || true
+
+  # --- session report ---
+  local now dur; now="$(date +%s)"; dur=$((now - started))
+  printf '%s\n' "$(t rep_header)"
+  printf '%s\n' "$(t rep_duration "$(_fmt_duration "$dur")")"
+  if [[ "$spot_was" == "enabled" ]]; then printf '%s\n' "$(t rep_spot_on "$mount")"
+  else printf '%s\n' "$(t rep_spot_keep)"; fi
+  if [[ "$tm_added" == "1" ]]; then printf '%s\n' "$(t rep_tm_removed)"
+  else printf '%s\n' "$(t rep_tm_keep)"; fi
+  local cloud ln; cloud="$(_cloud_lines "$mount" | cut -f2-)"
+  if [[ -n "$cloud" ]]; then
+    while IFS= read -r ln; do printf '  cloud daemons:   %s\n' "$ln"; done <<<"$cloud"
+  else printf '%s\n' "$(t rep_cloud_none)"; fi
+  local nsnap; nsnap="$(tmutil listlocalsnapshots / 2>/dev/null | grep -c 'com.apple.TimeMachine' || true)"
+  if [[ "${nsnap:-0}" -gt 0 ]]; then printf '%s\n' "$(t rep_snap_some "$nsnap")"
+  else printf '%s\n' "$(t rep_snap_none)"; fi
+  printf '%s\n' "$(t rep_swap)"
+
+  rm -f "$sf"
+}
+
 cmd_version() { echo "vaultwatch $VERSION"; }
 
 main() {
@@ -233,8 +430,8 @@ main() {
     install-hooks)   cmd_install_hooks "$@" ;;
     uninstall-hooks) cmd_uninstall_hooks "$@" ;;
     version)         cmd_version "$@" ;;
-    # start/stop — ядро сторожа, реализуется в следующем паке (3b).
-    start|stop)      err "vaultwatch: '$cmd' пока не реализован (pack 3b)"; exit 2 ;;
+    start)           cmd_start "$@" ;;
+    stop)            cmd_stop "$@" ;;
     *) t unknown_cmd "$cmd" >&2; echo >&2; usage >&2; exit 1 ;;
   esac
 }
