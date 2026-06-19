@@ -514,8 +514,8 @@ cmd_stop() {
   [[ -n "$ttl_label" ]] && _ttl_remove "$mount"
 
   # Восстанавливаем РОВНО то, что меняли.
-  [[ "$spot_was" == "enabled" ]] && mdutil -i on "$mount" >/dev/null 2>&1 || true
-  [[ "$tm_added" == "1" ]] && tmutil removeexclusion "$mount" >/dev/null 2>&1 || true
+  if [[ "$spot_was" == "enabled" ]]; then mdutil -i on "$mount" >/dev/null 2>&1 || true; fi
+  if [[ "$tm_added" == "1" ]]; then tmutil removeexclusion "$mount" >/dev/null 2>&1 || true; fi
 
   # --- session report ---
   local now dur; now="$(date +%s)"; dur=$((now - started))
