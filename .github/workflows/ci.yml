@@ -2,11 +2,13 @@ name: ci
 on: [push, pull_request]
 jobs:
   test:
-    runs-on: macos-latest
+    # Linux-раннер: бесплатные минуты в GitHub Free. vaultwatch 3a — чистая
+    # логика (shellcheck + vendor-check + bats), macOS/hdiutil пока не нужен.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
-        run: brew install bats-core shellcheck
+        run: sudo apt-get update && sudo apt-get install -y bats shellcheck
       - name: Lint
         run: shellcheck vaultwatch tools/vendor-common.sh
       - name: Vendored common is in sync with pinned securetrash

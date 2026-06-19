@@ -116,7 +116,9 @@ setup() {
   cp "${BATS_TEST_DIRNAME}/../vaultwatch" "$work/vaultwatch"
   cp "${BATS_TEST_DIRNAME}/../tools/vendor-common.sh" "$work/tools/"
   # Мутируем строку ВНУТРИ вшитого блока → --check должен поймать дрейф (exit 1).
-  sed -i '' 's/_ST_COMMON_LOADED=1/_ST_COMMON_LOADED=999/' "$work/vaultwatch"
+  # Portable (без sed -i: BSD/GNU расходятся): sed в файл → mv.
+  sed 's/_ST_COMMON_LOADED=1/_ST_COMMON_LOADED=999/' "$work/vaultwatch" > "$work/vaultwatch.mut"
+  mv "$work/vaultwatch.mut" "$work/vaultwatch"
   run bash "$work/tools/vendor-common.sh" --check
   [ "$status" -eq 1 ]
   [[ "$output" == *"ДРЕЙФ"* ]] || [[ "$output" == *"drift"* ]]
