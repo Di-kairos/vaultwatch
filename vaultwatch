@@ -199,7 +199,8 @@ EOF
 }
 
 cmd_install_hooks() {
-  require_macos
+  # Установка хуков — просто запись файлов, платформо-независима. macOS требуется
+  # только ядру start/stop (mdutil/tmutil), где require_macos и стоит (pack 3b).
   mkdir -p "$ST_HOOK_DIR"
   local self; self="$(_self_path)"
   _write_hook post-open  start "$self"
