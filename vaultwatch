@@ -130,7 +130,10 @@ t() {
 Usage: vaultwatch <command> [args]
 
 Commands:
-  start <mount>       Guard an open vault (Spotlight off, TM exclude, cloud check)
+  start [--ttl D] [--force] <mount>
+                      Guard an open vault (Spotlight off, TM exclude, cloud check).
+                      --ttl D  auto-detach after D (e.g. 30m, 2h, 45s); --force
+                      allows detaching even with open files (risk of data loss).
   stop <mount>        Restore everything and print a session report
   install-hooks       Wire vaultwatch into securetrash vault open/close
   uninstall-hooks     Remove vaultwatch hooks (only those it manages)
@@ -145,7 +148,10 @@ EOF
 Usage: vaultwatch <command> [args]
 
 Commands:
-  start <mount>       Сторожить открытый vault (Spotlight off, TM exclude, cloud-чек)
+  start [--ttl D] [--force] <mount>
+                      Сторожить открытый vault (Spotlight off, TM exclude, cloud-чек).
+                      --ttl D  авто-detach через D (напр. 30m, 2h, 45s); --force
+                      форсирует detach при открытых файлах (риск потери данных).
   stop <mount>        Восстановить всё и показать session report
   install-hooks       Подключить vaultwatch к securetrash vault open/close
   uninstall-hooks     Удалить хуки vaultwatch (только свои, managed)
@@ -177,6 +183,14 @@ EOF
     ru:cloud_inside)     printf '%s активен — vault ВНУТРИ его синк-папки (!)' "$1" ;;
     en:no_session)       printf 'no active vaultwatch session for %s (nothing to restore).' "$1" ;;
     ru:no_session)       printf 'нет активной сессии vaultwatch для %s (нечего восстанавливать).' "$1" ;;
+    en:ttl_bad)          printf 'bad --ttl duration: %s (use 30m, 2h, 45s, 1d or bare seconds).' "$1" ;;
+    ru:ttl_bad)          printf 'неверная длительность --ttl: %s (формат: 30m, 2h, 45s, 1d или просто секунды).' "$1" ;;
+    en:ttl_scheduled)    printf 'auto-exit scheduled in %s.' "$1" ;;
+    ru:ttl_scheduled)    printf 'авто-выход запланирован через %s.' "$1" ;;
+    en:ttl_busy)         printf 'TTL expired but %s has open files — NOT detached (use --force to override).' "$1" ;;
+    ru:ttl_busy)         printf 'TTL истёк, но в %s открыты файлы — НЕ размонтирую (--force чтобы форсировать).' "$1" ;;
+    en:ttl_force_confirm) printf 'force-detach %s with open files? data corruption risk' "$1" ;;
+    ru:ttl_force_confirm) printf 'форсировать detach %s при открытых файлах? риск повредить данные' "$1" ;;
     en:rep_header)       echo 'vaultwatch — session report' ;;
     ru:rep_header)       echo 'vaultwatch — session report' ;;
     en:rep_duration)     printf '  duration:        %s' "$1" ;;
@@ -332,9 +346,34 @@ _require_mount() {
   printf '%s' "$canon"
 }
 
+# Длительность ("30m"/"2h"/"45s"/"1d"/голые секунды) → секунды. !=0 при мусоре.
+_parse_duration() {
+  local s="${1:-}" n unit
+  [[ "$s" =~ ^([0-9]+)([smhd]?)$ ]] || return 1
+  n="${BASH_REMATCH[1]}"; unit="${BASH_REMATCH[2]}"
+  case "$unit" in
+    s|"") printf '%s' "$n" ;;
+    m)    printf '%s' "$((n * 60))" ;;
+    h)    printf '%s' "$((n * 3600))" ;;
+    d)    printf '%s' "$((n * 86400))" ;;
+  esac
+}
+
 cmd_start() {
   require_macos
-  local mount; mount="$(_require_mount "${1:-}")"
+  local ttl_secs=0 ttl_force=0 raw=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --ttl)   shift
+               ttl_secs="$(_parse_duration "${1:-}")" || { err "$(t ttl_bad "${1:-}")"; exit 1; }
+               shift ;;
+      --force) ttl_force=1; shift ;;
+      --)      shift; raw="${1:-}"; break ;;
+      -*)      err "$(t unknown_cmd "$1")"; exit 1 ;;
+      *)       raw="$1"; shift ;;
+    esac
+  done
+  local mount; mount="$(_require_mount "$raw")"
 
   # Spotlight: запоминаем предыдущее состояние, затем выключаем индексацию.
   local spot_was=unknown
@@ -359,9 +398,24 @@ cmd_start() {
     printf 'started=%s\n' "$(date +%s)"
     printf 'spotlight_was=%s\n' "$spot_was"
     printf 'tm_added=%s\n' "$tm_added"
+    printf 'ttl_secs=%s\n' "$ttl_secs"
+    printf 'ttl_force=%s\n' "$ttl_force"
   } > "$sf"
 
+  # Авто-выход по таймеру: фоновый one-shot (sleep → _ttl_fire). VW_NO_SPAWN=1
+  # в тестах подавляет реальный sleep. PID кладём в state, чтобы stop отменил таймер.
+  if [[ "$ttl_secs" -gt 0 && "${VW_NO_SPAWN:-0}" != "1" ]]; then
+    local self; self="$(_self_path)"
+    # $1/$2/$3 — позиционные параметры внутреннего bash (не host-expansion), single-quote намеренно.
+    # shellcheck disable=SC2016
+    nohup bash -c 'sleep "$1"; "$2" _ttl_fire "$3"' _ "$ttl_secs" "$self" "$mount" \
+      >/dev/null 2>&1 &
+    printf 'ttl_pid=%s\n' "$!" >> "$sf"
+    disown 2>/dev/null || true
+  fi
+
   info "$(t watching "$mount")"
+  [[ "$ttl_secs" -gt 0 ]] && info "$(t ttl_scheduled "$(_fmt_duration "$ttl_secs")")"
   _report_cloud_start "$mount"
 }
 
@@ -387,14 +441,18 @@ cmd_stop() {
   fi
 
   # Читаем состояние сессии (parse, не source — shellcheck-clean и безопаснее).
-  local started=0 spot_was=unknown tm_added=0 k v
+  local started=0 spot_was=unknown tm_added=0 ttl_pid="" k v
   while IFS='=' read -r k v; do
     case "$k" in
       started)       started="$v" ;;
       spotlight_was) spot_was="$v" ;;
       tm_added)      tm_added="$v" ;;
+      ttl_pid)       ttl_pid="$v" ;;
     esac
   done < "$sf"
+
+  # Отменяем таймер авто-выхода, если он ещё жив (vault закрыт вручную раньше TTL).
+  [[ -n "$ttl_pid" ]] && kill "$ttl_pid" 2>/dev/null || true
 
   # Восстанавливаем РОВНО то, что меняли.
   [[ "$spot_was" == "enabled" ]] && mdutil -i on "$mount" >/dev/null 2>&1 || true
@@ -420,6 +478,37 @@ cmd_stop() {
   rm -f "$sf"
 }
 
+# Внутренняя команда: срабатывает по истечении --ttl (из фонового таймера).
+# Честно про границу: hdiutil detach не размонтирует том с открытыми файлами.
+# Заняты файлы → предупреждаем и НЕ трогаем (если только не --force с confirm).
+cmd_ttl_fire() {
+  require_macos
+  local raw="${1:-}"; [[ -n "$raw" ]] || return 0
+  local mount; mount="$(_abspath "$raw" 2>/dev/null || printf '%s' "$raw")"
+  local sf; sf="$(_state_file "$mount")"
+  [[ -f "$sf" ]] || return 0   # сессии нет (закрыт вручную) — тихо
+
+  local ttl_force=0 k v
+  while IFS='=' read -r k v; do
+    [[ "$k" == "ttl_force" ]] && ttl_force="$v"
+  done < "$sf"
+
+  if lsof "$mount" >/dev/null 2>&1; then
+    # Том занят открытыми файлами.
+    if [[ "$ttl_force" == "1" ]] && confirm "$(t ttl_force_confirm "$mount")"; then
+      hdiutil detach -force "$mount" >/dev/null 2>&1 || true
+    else
+      warn "$(t ttl_busy "$mount")"
+      return 0
+    fi
+  else
+    hdiutil detach "$mount" >/dev/null 2>&1 || true
+  fi
+
+  # Том размонтирован — восстанавливаем состояние и печатаем session report.
+  cmd_stop "$mount"
+}
+
 cmd_version() { echo "vaultwatch $VERSION"; }
 
 main() {
@@ -432,6 +521,7 @@ main() {
     version)         cmd_version "$@" ;;
     start)           cmd_start "$@" ;;
     stop)            cmd_stop "$@" ;;
+    _ttl_fire)       cmd_ttl_fire "$@" ;;   # внутренняя: вызывается фоновым TTL-таймером
     *) t unknown_cmd "$cmd" >&2; echo >&2; usage >&2; exit 1 ;;
   esac
 }

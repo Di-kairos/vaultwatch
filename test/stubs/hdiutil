@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Стаб hdiutil. Логирует вызов в $VW_STUB_LOG; всегда успех.
+printf 'hdiutil %s\n' "$*" >>"${VW_STUB_LOG:-/dev/null}"
+exit 0

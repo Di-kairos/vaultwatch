@@ -6,18 +6,25 @@
 открытый plaintext может утечь (Spotlight, Time Machine), и **восстанавливает всё при
 закрытии**. Запускается автоматически из хуков `securetrash vault open/close`.
 
-> **Статус: ранний (v0.1.0, work in progress).** Готовы интеграция (хуки + вендоринг)
-> и **сторожевое ядро `start`/`stop`** (Spotlight off, Time Machine exclude, cloud-detect,
-> session report). Фоновый режим через `launchd` и авто-выход `--ttl` — в следующем паке.
+> **Статус: ранний (v0.1.0, work in progress).** Готовы интеграция (хуки + вендоринг),
+> **сторожевое ядро `start`/`stop`** (Spotlight off, Time Machine exclude, cloud-detect,
+> session report) и **авто-выход `--ttl`**. Фоновый режим через `launchd` LaunchAgent —
+> в следующем паке (сейчас `--ttl` держит таймер фоновым процессом сессии).
 
 ## Использование
 
 ```bash
-vaultwatch start <mount>      # сторожить открытый vault (обычно из хука post-open)
-vaultwatch stop  <mount>      # восстановить всё + session report (из хука post-close)
-vaultwatch install-hooks      # подключить к securetrash vault open/close
-vaultwatch uninstall-hooks    # убрать (только свои managed-хуки)
+vaultwatch start [--ttl D] [--force] <mount>   # сторожить vault (обычно из хука post-open)
+vaultwatch stop  <mount>                        # восстановить всё + session report (post-close)
+vaultwatch install-hooks                        # подключить к securetrash vault open/close
+vaultwatch uninstall-hooks                      # убрать (только свои managed-хуки)
 ```
+
+`--ttl D` — авто-detach тома через `D` (`30m`, `2h`, `45s`, `1d` или голые секунды):
+по истечении vaultwatch проверяет открытые файлы (`lsof`) и, если их нет, размонтирует
+том и восстанавливает состояние. Если файлы открыты — **честно не трогает** том и
+предупреждает; `--force` форсирует `hdiutil detach -force` (с подтверждением, риск
+потери данных). `stop` (ручное закрытие раньше TTL) отменяет таймер.
 
 `start` запоминает прежнее состояние и сужает каналы утечки; `stop` восстанавливает
 **ровно то, что менял** `start` (если Spotlight был уже выключен или vault уже исключён
@@ -59,6 +66,9 @@ vaultwatch — session report
   внутри их синк-папок — сообщает «демон X активен, vault внутри/вне его папки», не телепатия.
 - **восстанавливает только своё:** если Spotlight был выключен или vault уже был исключён
   из Time Machine до сессии — `stop` оставляет это как есть, не «чинит» чужое состояние.
+- **`--ttl` упирается в открытые файлы:** `hdiutil detach` не размонтирует том с открытыми
+  дескрипторами. vaultwatch проверяет `lsof` и при занятости **не форсирует** — честно
+  предупреждает; `--force` (`detach -force`) только с подтверждением и осознанием риска.
 
 ## Windows-эквивалент
 
