@@ -11,6 +11,25 @@
 > session report) и **авто-выход `--ttl`** через **launchd LaunchAgent** (managed-таймер,
 > виден в `launchctl list`, чисто снимается через bootout).
 
+## Установка
+
+Checksum-verified установка с релизного тега (как у securetrash) — verify-then-run:
+
+```bash
+curl -fsSLO https://github.com/Di-kairos/vaultwatch/releases/latest/download/install.sh
+curl -fsSLO https://github.com/Di-kairos/vaultwatch/releases/latest/download/SHA256SUMS
+shasum -a 256 -c SHA256SUMS --ignore-missing   # проверить сам install.sh
+less install.sh                                  # прочитать глазами
+bash install.sh                                  # тянет vaultwatch + сумму, проверяет, ставит
+vaultwatch install-hooks                         # подключить к securetrash
+```
+
+`install.sh` тянет бинарь и `SHA256SUMS` из неизменного релизного тега и проверяет хеш
+**до** установки. Переменные: `VW_VERSION` (конкретный тег), `VW_DEST` (путь), `VW_BASE_URL`.
+
+> Публичная установка доступна после первого публичного релиза (`git tag v0.1.0`).
+> Пока репозиторий приватный — клонировать и ставить вручную (`install -m 0755 vaultwatch /usr/local/bin/`).
+
 ## Использование
 
 ```bash
