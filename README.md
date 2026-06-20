@@ -1,60 +1,85 @@
+**English** · [Русский](README.ru.md)
+
 # vaultwatch
 
-Честный сторож открытого vault — часть экосистемы [Paranoid Tools](https://github.com/Di-kairos/paranoid-tools).
+An honest watchdog for an open vault — part of the [Paranoid Tools](https://github.com/Di-kairos/paranoid-tools) ecosystem.
 
-`vaultwatch` активен **только пока vault примонтирован**. Он сужает каналы, по которым
-открытый plaintext может утечь (Spotlight, Time Machine), и **восстанавливает всё при
-закрытии**. Запускается автоматически из хуков `securetrash vault open/close`.
+[![CI](https://github.com/Di-kairos/vaultwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/Di-kairos/vaultwatch/actions/workflows/ci.yml)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+![platform](https://img.shields.io/badge/platform-macOS-blue)
+![shellcheck](https://img.shields.io/badge/shellcheck-passing-brightgreen)
 
-> **Статус: ранний (v0.1.0, work in progress).** Готовы интеграция (хуки + вендоринг),
-> **сторожевое ядро `start`/`stop`** (Spotlight off, Time Machine exclude, cloud-detect,
-> session report) и **авто-выход `--ttl`** через **launchd LaunchAgent** (managed-таймер,
-> виден в `launchctl list`, чисто снимается через bootout).
+`vaultwatch` is active **only while a vault is mounted**. It narrows the channels through
+which open plaintext can leak (Spotlight, Time Machine) and **restores everything on close**.
+It runs automatically from the `securetrash vault open/close` hooks.
 
-## Установка
+> **Status: early (v0.1.0, work in progress).** Done: integration (hooks + vendoring),
+> the **watchdog core `start`/`stop`** (Spotlight off, Time Machine exclude, cloud-detect,
+> session report), and **auto-exit `--ttl`** via a **launchd LaunchAgent** (a managed timer,
+> visible in `launchctl list`, cleanly removed via bootout).
 
-Checksum-verified установка с релизного тега (как у securetrash) — verify-then-run:
+## Install
+
+Checksum-verified install from the release tag (same approach as securetrash). Prefer
+verify-then-run — download, check the checksum, read it, then run:
 
 ```bash
 curl -fsSLO https://github.com/Di-kairos/vaultwatch/releases/latest/download/install.sh
 curl -fsSLO https://github.com/Di-kairos/vaultwatch/releases/latest/download/SHA256SUMS
-shasum -a 256 -c SHA256SUMS --ignore-missing   # проверить сам install.sh
-less install.sh                                  # прочитать глазами
-bash install.sh                                  # тянет vaultwatch + сумму, проверяет, ставит
-vaultwatch install-hooks                         # подключить к securetrash
+shasum -a 256 -c SHA256SUMS --ignore-missing   # verifies install.sh itself
+less install.sh                                  # read it
+bash install.sh                                  # pulls vaultwatch + checksum, verifies, installs
+vaultwatch install-hooks                         # wire into securetrash
 ```
 
-`install.sh` тянет бинарь и `SHA256SUMS` из неизменного релизного тега и проверяет хеш
-**до** установки. Переменные: `VW_VERSION` (конкретный тег), `VW_DEST` (путь), `VW_BASE_URL`.
-
-> Публичная установка доступна после первого публичного релиза (`git tag v0.1.0`).
-> Пока репозиторий приватный — клонировать и ставить вручную (`install -m 0755 vaultwatch /usr/local/bin/`).
-
-## Использование
+Quick form (this runs code you haven't read — choose deliberately):
 
 ```bash
-vaultwatch start [--ttl D] [--force] <mount>   # сторожить vault (обычно из хука post-open)
-vaultwatch stop  <mount>                        # восстановить всё + session report (post-close)
-vaultwatch install-hooks                        # подключить к securetrash vault open/close
-vaultwatch uninstall-hooks                      # убрать (только свои managed-хуки)
+curl -fsSL https://github.com/Di-kairos/vaultwatch/releases/latest/download/install.sh | bash
 ```
 
-`--ttl D` — авто-detach тома через `D` (`30m`, `2h`, `45s`, `1d` или голые секунды).
-Таймер ставится как **launchd LaunchAgent** (`~/Library/LaunchAgents/com.vaultwatch.ttl.*.plist`,
-`RunAtLoad` → спит `D` → дёргает `vaultwatch _ttl_fire <mount>`). По истечении vaultwatch
-проверяет открытые файлы (`lsof`) и, если их нет, размонтирует том (`hdiutil detach`) и
-восстанавливает состояние. Если файлы открыты — **честно не трогает** том и предупреждает;
-`--force` форсирует `hdiutil detach -force` (с подтверждением, риск потери данных).
-`stop` (ручное закрытие раньше TTL) снимает LaunchAgent (`bootout` + удаление plist).
+`install.sh` pulls the binary and `SHA256SUMS` from the immutable release tag and verifies
+the hash **before** installing. Environment variables: `VW_VERSION` (pin a specific tag),
+`VW_DEST` (install path), `VW_BASE_URL` (override the source for forks/tests).
 
-`start` запоминает прежнее состояние и сужает каналы утечки; `stop` восстанавливает
-**ровно то, что менял** `start` (если Spotlight был уже выключен или vault уже исключён
-из Time Machine до сессии — `stop` это не трогает), и печатает отчёт сессии.
+> **Integrity vs authenticity (honest scope).** The checksum proves the binary matches the
+> `SHA256SUMS` published in the **same release** — it catches corruption and partial/cached
+> tampering. It does **not** by itself defeat an attacker who can rewrite *both* the binary
+> and its checksum at the source, nor does it prove *who* published them. For authenticity
+> you need a signature or Homebrew. Pin a version with `VW_VERSION=0.1.0` instead of `latest`
+> for reproducibility.
 
-Хуки кладутся в `${ST_HOOK_DIR:-~/.securetrash/hooks}` — тот же каталог, который читает
-`securetrash`. Чужие (не-managed) хуки `vaultwatch` не трогает.
+> Public install becomes available after the first public release (`git tag v0.1.0`).
+> While the repository is private, clone and install manually
+> (`install -m 0755 vaultwatch /usr/local/bin/`).
 
-### Session report (пример)
+## Usage
+
+```bash
+vaultwatch start [--ttl D] [--force] <mount>   # guard a vault (normally from the post-open hook)
+vaultwatch stop  <mount>                        # restore everything + session report (post-close)
+vaultwatch install-hooks                        # wire into securetrash vault open/close
+vaultwatch uninstall-hooks                      # remove (only the hooks it manages)
+vaultwatch version                              # show the version
+```
+
+`--ttl D` auto-detaches the volume after `D` (`30m`, `2h`, `45s`, `1d`, or bare seconds).
+The timer is installed as a **launchd LaunchAgent**
+(`~/Library/LaunchAgents/com.vaultwatch.ttl.*.plist`, `RunAtLoad` → sleeps `D` → fires
+`vaultwatch _ttl_fire <mount>`). When it fires, vaultwatch checks for open files (`lsof`)
+and, if there are none, unmounts the volume (`hdiutil detach`) and restores state. If files
+are open it **honestly leaves the volume alone** and warns; `--force` forces
+`hdiutil detach -force` (with confirmation, risk of data loss). `stop` (a manual close before
+the TTL) tears the LaunchAgent down (`bootout` + plist removal).
+
+`start` records the prior state and narrows leak channels; `stop` restores **exactly what
+`start` changed** (if Spotlight was already off, or the vault was already excluded from Time
+Machine before the session, `stop` leaves that as-is) and prints a session report.
+
+Hooks are placed in `${ST_HOOK_DIR:-~/.securetrash/hooks}` — the same directory `securetrash`
+reads. vaultwatch does not touch foreign (non-managed) hooks.
+
+### Session report (example)
 
 ```
 vaultwatch — session report
@@ -66,32 +91,40 @@ vaultwatch — session report
   swap:            NOT addressed (see limitations)
 ```
 
-## Архитектура
+## Architecture
 
-- Single-file Bash, ноль зависимостей. Нативные примитивы macOS.
-- Общее ядро (`lib/common.sh`) **вендорится** из securetrash inline, пиннуто к git-ref;
-  `tools/vendor-common.sh --check` ловит дрейф в CI. См. `paranoid-tools/README.md`.
+- Single-file Bash, zero dependencies. Native macOS primitives.
+- The shared core (`lib/common.sh`) is **vendored** from securetrash inline, pinned to a
+  git-ref; `tools/vendor-common.sh --check` catches drift in CI. See `paranoid-tools/README.md`.
 
 ## Scope & limitations
 
-Базовый принцип экосистемы: честно про пределы. vaultwatch делает **обратимые**
-исключения на время сессии и **не**:
+The core principle of the ecosystem: be honest about the limits. vaultwatch makes
+**reversible** exclusions for the duration of the session and does **not**:
 
-- **не закрывает swap** — если во время сессии была memory pressure, фрагменты plaintext
-  могли уйти в swap и остаться там до перезаписи. session report говорит это прямо.
-- **не удаляет уже снятые локальные снапшоты** Time Machine: `addexclusion` исключает
-  vault на будущее, но снапшоты, снятые до старта, остаются. vaultwatch их обнаруживает
-  (`tmutil listlocalsnapshots /`) и сообщает в отчёте — не удаляет молча.
-- **не редактирует настройки облаков и не удаляет чужие бэкапы.** cloud-детект эвристичен:
-  смотрит запущенные процессы (Dropbox/OneDrive/iCloud/Google Drive) и лежит ли mount
-  внутри их синк-папок — сообщает «демон X активен, vault внутри/вне его папки», не телепатия.
-- **восстанавливает только своё:** если Spotlight был выключен или vault уже был исключён
-  из Time Machine до сессии — `stop` оставляет это как есть, не «чинит» чужое состояние.
-- **`--ttl` упирается в открытые файлы:** `hdiutil detach` не размонтирует том с открытыми
-  дескрипторами. vaultwatch проверяет `lsof` и при занятости **не форсирует** — честно
-  предупреждает; `--force` (`detach -force`) только с подтверждением и осознанием риска.
+- **Does not close swap** — if there was memory pressure during the session, fragments of
+  plaintext may have been written to swap and remain there until overwritten. The session
+  report says this plainly.
+- **Does not delete local Time Machine snapshots that were already taken:** `addexclusion`
+  excludes the vault going forward, but snapshots taken before start remain. vaultwatch
+  detects them (`tmutil listlocalsnapshots /`) and reports them — it does not silently delete.
+- **Does not edit cloud settings or delete anyone's backups.** Cloud detection is heuristic:
+  it inspects running processes (Dropbox/OneDrive/iCloud/Google Drive) and whether the mount
+  sits inside their sync folders — it reports "daemon X is active, vault inside/outside its
+  folder", not telepathy.
+- **Restores only its own changes:** if Spotlight was already off, or the vault was already
+  excluded from Time Machine before the session, `stop` leaves it as-is — it does not "fix"
+  state it did not set.
+- **`--ttl` is blocked by open files:** `hdiutil detach` will not unmount a volume with open
+  descriptors. vaultwatch checks `lsof` and, when the volume is busy, **does not force** it —
+  it warns honestly; `--force` (`detach -force`) only with confirmation and awareness of the risk.
 
-## Windows-эквивалент
+## Windows equivalent
 
-Планируется: эквивалент через VSS (shadow copies), Windows Search indexer и контроль
-pagefile/OneDrive. Порт — во вторую очередь, как у securetrash.
+Planned: an equivalent via VSS (shadow copies), the Windows Search indexer, and
+pagefile/OneDrive control. The port comes second, as with securetrash.
+
+## License
+
+[MIT](LICENSE). Security policy: [SECURITY.md](SECURITY.md). How to contribute:
+[CONTRIBUTING.md](CONTRIBUTING.md).
