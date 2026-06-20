@@ -577,7 +577,8 @@ main() {
   case "$cmd" in
     install-hooks)   cmd_install_hooks "$@" ;;
     uninstall-hooks) cmd_uninstall_hooks "$@" ;;
-    version)         cmd_version "$@" ;;
+    version|-v|--version) cmd_version "$@" ;;
+    help|-h|--help)  usage ;;
     start)           cmd_start "$@" ;;
     stop)            cmd_stop "$@" ;;
     _ttl_fire)       cmd_ttl_fire "$@" ;;   # внутренняя: вызывается фоновым TTL-таймером
