@@ -4,8 +4,8 @@
 # (defense-in-depth: ref может быть переписан/MITM — хеш ловит подмену байтов).
 #
 # Использование:
-#   tools/vendor-common.sh          # обновить вшитый блок из пина (с проверкой хеша)
-#   tools/vendor-common.sh --check  # CI: блок не дрейфит И источник совпал с хешем
+#   tools/vendor-common.sh          # обновить вшитый блок из источника (нужна сеть)
+#   tools/vendor-common.sh --check  # CI: вшитый блок == запиннутому SHA256 (ОФЛАЙН, без сети)
 #
 # При бампе версии common.sh обнови PIN и COMMON_SHA256 вместе (и маркер BEGIN).
 set -euo pipefail
@@ -55,20 +55,32 @@ build_expected() {
   awk 'p{print} /# === END vendored common/{p=1}' "$TARGET"
 }
 
+# Извлечь вшитый блок (строки строго между маркерами) — для офлайн-сверки хеша.
+_extract_block() {
+  awk 'f && /# === END vendored common/{exit} f{print} /# === BEGIN vendored common/{f=1}' "$TARGET"
+}
+
 _assert_markers
-COMMON_FILE="$(mktemp)"
-trap 'rm -f "$COMMON_FILE"' EXIT
-_fetch_common_to "$COMMON_FILE"
 
 if [[ "${1:-}" == "--check" ]]; then
-  if diff -u <(build_expected "$COMMON_FILE") "$TARGET" >/dev/null; then
-    echo "vendor: вшитый common.sh синхронен пину ${PIN:0:7} и хешу ✓"
+  # ОФЛАЙН: хешируем вшитый блок и сверяем с запиннутым SHA256 — без сети. CI не зависит
+  # от доступности (в т.ч. приватности) securetrash; MITM-поверхность сети исключена —
+  # доверенный якорь это сам пин COMMON_SHA256 в этом файле (под git).
+  actual="$(_extract_block | shasum -a 256 | awk '{print $1}')"
+  if [[ "$actual" == "$COMMON_SHA256" ]]; then
+    echo "vendor: вшитый common.sh синхронен пину ${PIN:0:7} и хешу ✓ (offline)"
   else
-    echo "vendor: ДРЕЙФ — вшитый common.sh не совпадает с пином. Запусти tools/vendor-common.sh" >&2
-    diff -u "$TARGET" <(build_expected "$COMMON_FILE") || true
+    echo "vendor: ДРЕЙФ — вшитый common.sh не совпадает с запиннутым SHA256." >&2
+    echo "  expected: $COMMON_SHA256" >&2
+    echo "  actual:   $actual" >&2
+    echo "  Запусти tools/vendor-common.sh для пере-вшивания из источника." >&2
     exit 1
   fi
 else
+  # ОБНОВЛЕНИЕ: тянем точные байты common.sh с пиннутого ref (нужна сеть) и сверяем SHA.
+  COMMON_FILE="$(mktemp)"
+  trap 'rm -f "$COMMON_FILE"' EXIT
+  _fetch_common_to "$COMMON_FILE"
   tmp="$(mktemp)"
   build_expected "$COMMON_FILE" > "$tmp"
   # Сохранить режим целевого файла (mv от mktemp затёр бы +x).
