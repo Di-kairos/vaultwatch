@@ -5,6 +5,18 @@
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-06-22
+
+### Added
+- **Подпись релизов (Ed25519, опциональная):** CI подписывает `SHA256SUMS`, `install.sh`
+  авто-проверяет подпись поверх контрольной суммы (мягкая деградация). Pubkey в `SECURITY.md`.
+- Homebrew `Formula/vaultwatch.rb`, `LICENSE`/`SECURITY.md`/`CONTRIBUTING.md`,
+  English-primary README + `README.ru.md`, флаги `-v`/`--version`, `-h`/`--help`.
+
+### Fixed
+- **Офлайн `vendor --check`:** хеш вшитого common-блока против запиннутого SHA, без сети
+  (раньше падал 404 после ухода securetrash в private → красный CI).
+
 ## [0.1.0] — 2026-06-19
 
 Первый функциональный срез: честный сторож открытого vault для macOS.
