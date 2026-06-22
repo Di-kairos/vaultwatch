@@ -25,16 +25,34 @@ jobs:
         working-directory: dist
         run: sha256sum vaultwatch install.sh > SHA256SUMS
 
+      - name: Sign SHA256SUMS (if a signing key is configured)
+        working-directory: dist
+        env:
+          SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          # Подпись поверх целостности. Ключ опционален: нет секрета → релиз остаётся
+          # checksum-verified, без .sig (install.sh это переживает). Ключ ed25519 без
+          # passphrase; namespace 'file' как у ssh-keygen -Y verify.
+          if [ -z "${SIGNING_KEY:-}" ]; then
+            echo "RELEASE_SIGNING_KEY не задан — пропускаю подпись (релиз остаётся checksum-verified)."
+            exit 0
+          fi
+          umask 077
+          printf '%s\n' "$SIGNING_KEY" > signing_key
+          ssh-keygen -Y sign -f signing_key -n file SHA256SUMS
+          rm -f signing_key
+          echo "Подписал SHA256SUMS → SHA256SUMS.sig"
+
       - name: Create GitHub Release with verified assets
         # Имя тега берём из защищённой env-переменной, не из inline-выражения.
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          assets=(dist/vaultwatch dist/install.sh dist/SHA256SUMS)
+          [ -f dist/SHA256SUMS.sig ] && assets+=(dist/SHA256SUMS.sig)
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --title "$TAG" \
             --generate-notes \
-            dist/vaultwatch \
-            dist/install.sh \
-            dist/SHA256SUMS
+            "${assets[@]}"

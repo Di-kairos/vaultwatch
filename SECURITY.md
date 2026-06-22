@@ -58,3 +58,32 @@ Out of scope:
 
 The latest released version receives security fixes. vaultwatch is pre-1.0;
 older tags are not maintained.
+
+## Verifying release signatures
+
+Releases ship a `SHA256SUMS` (integrity) and, once release signing is enabled, a
+`SHA256SUMS.sig` (authenticity) produced with a dedicated Ed25519 key shared across
+Paranoid Tools. The `install.sh` installer verifies the signature automatically when
+present — you don't have to do anything. To verify by hand:
+
+```sh
+base=https://github.com/Di-kairos/vaultwatch/releases/latest/download
+curl -fsSLO "$base/SHA256SUMS"
+curl -fsSLO "$base/SHA256SUMS.sig"
+printf '%s namespaces="file" %s\n' \
+  releases@paranoid-tools \
+  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICb2nz4EliRJIU0ExeF41klE/zlyo7XFY119mfzscn2U" \
+  > allowed_signers
+ssh-keygen -Y verify -f allowed_signers -I releases@paranoid-tools \
+  -n file -s SHA256SUMS.sig < SHA256SUMS
+```
+
+**Release-signing public key** (identity `releases@paranoid-tools`, shared across Paranoid Tools):
+
+```
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICb2nz4EliRJIU0ExeF41klE/zlyo7XFY119mfzscn2U
+```
+
+The private key is held offline by the maintainer (inside a securetrash vault) and a
+passphraseless copy lives only in the CI signing secret. If the key is ever rotated,
+the new public key is published here and in the installer.

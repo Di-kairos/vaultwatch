@@ -51,6 +51,29 @@ if ! ( cd "$TMP" && shasum -a 256 -c SHA256SUMS --ignore-missing ); then
   exit 1
 fi
 
+# --- Проверка ПОДПИСИ релиза (аутентичность поверх целостности) ---
+# Релизы подписаны выделенным ed25519-ключом экосистемы (ssh-keygen -Y). Pubkey вшит ниже.
+# Мягкая деградация (НЕ ломает установку): нет ssh-keygen → пропуск; у релиза нет .sig
+# (старый/неподписанный) → честное замечание, идём дальше (целостность уже проверена);
+# .sig есть и НЕ сошёлся → жёсткий отказ (явный признак подмены).
+RELEASE_SIGNING_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICb2nz4EliRJIU0ExeF41klE/zlyo7XFY119mfzscn2U"
+SIGN_PRINCIPAL="releases@paranoid-tools"
+if [[ -n "$RELEASE_SIGNING_PUBKEY" ]] && command -v ssh-keygen >/dev/null 2>&1; then
+  if curl -fsSL "${BASE_URL}/SHA256SUMS.sig" -o "${TMP}/SHA256SUMS.sig" 2>/dev/null; then
+    printf '%s namespaces="file" %s\n' "$SIGN_PRINCIPAL" "$RELEASE_SIGNING_PUBKEY" > "${TMP}/allowed_signers"
+    echo "Проверяю подпись релиза..."
+    if ( cd "$TMP" && ssh-keygen -Y verify -f allowed_signers -I "$SIGN_PRINCIPAL" \
+                        -n file -s SHA256SUMS.sig < SHA256SUMS >/dev/null 2>&1 ); then
+      echo "✓ Подпись релиза верна (аутентичность подтверждена)."
+    else
+      echo "✗ Подпись релиза НЕ прошла проверку — установка прервана (возможна подмена)." >&2
+      exit 1
+    fi
+  else
+    echo "! Подпись для этого релиза недоступна — пропускаю (целостность по SHA256 проверена)."
+  fi
+fi
+
 # Хеш верный → устанавливаем. Под несписываемый каталог — через sudo.
 echo "Устанавливаю в ${DEST}..."
 if [[ -w "$(dirname "$DEST")" ]]; then
