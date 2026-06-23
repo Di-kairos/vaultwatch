@@ -13,7 +13,7 @@
 открытый plaintext может утечь (Spotlight, Time Machine), и **восстанавливает всё при
 закрытии**. Запускается автоматически из хуков `securetrash vault open/close`.
 
-> **Статус: ранний (v0.1.0, work in progress).** Готовы интеграция (хуки + вендоринг),
+> **Статус: ранний (v0.1.1, work in progress).** Готовы интеграция (хуки + вендоринг),
 > **сторожевое ядро `start`/`stop`** (Spotlight off, Time Machine exclude, cloud-detect,
 > session report) и **авто-выход `--ttl`** через **launchd LaunchAgent** (managed-таймер,
 > виден в `launchctl list`, чисто снимается через bootout).
@@ -55,6 +55,7 @@ curl -fsSL https://github.com/Di-kairos/vaultwatch/releases/latest/download/inst
 ```bash
 vaultwatch start [--ttl D] [--force] <mount>   # сторожить vault (обычно из хука post-open)
 vaultwatch stop  <mount>                        # восстановить всё + session report (post-close)
+vaultwatch status                               # показать активные сессии (только чтение)
 vaultwatch install-hooks                        # подключить к securetrash vault open/close
 vaultwatch uninstall-hooks                      # убрать (только свои managed-хуки)
 vaultwatch version                              # показать версию

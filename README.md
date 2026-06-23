@@ -13,7 +13,7 @@ An honest watchdog for an open vault — part of the [Paranoid Tools](https://gi
 which open plaintext can leak (Spotlight, Time Machine) and **restores everything on close**.
 It runs automatically from the `securetrash vault open/close` hooks.
 
-> **Status: early (v0.1.0, work in progress).** Done: integration (hooks + vendoring),
+> **Status: early (v0.1.1, work in progress).** Done: integration (hooks + vendoring),
 > the **watchdog core `start`/`stop`** (Spotlight off, Time Machine exclude, cloud-detect,
 > session report), and **auto-exit `--ttl`** via a **launchd LaunchAgent** (a managed timer,
 > visible in `launchctl list`, cleanly removed via bootout).
@@ -58,6 +58,7 @@ the hash **before** installing. Environment variables: `VW_VERSION` (pin a speci
 ```bash
 vaultwatch start [--ttl D] [--force] <mount>   # guard a vault (normally from the post-open hook)
 vaultwatch stop  <mount>                        # restore everything + session report (post-close)
+vaultwatch status                               # show active sessions (read-only)
 vaultwatch install-hooks                        # wire into securetrash vault open/close
 vaultwatch uninstall-hooks                      # remove (only the hooks it manages)
 vaultwatch version                              # show the version
