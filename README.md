@@ -49,9 +49,8 @@ the hash **before** installing. Environment variables: `VW_VERSION` (pin a speci
 > you need a signature or Homebrew. Pin a version with `VW_VERSION=0.1.0` instead of `latest`
 > for reproducibility.
 
-> Public install becomes available after the first public release (`git tag v0.1.0`).
-> While the repository is private, clone and install manually
-> (`install -m 0755 vaultwatch /usr/local/bin/`).
+> The current public release is **v0.1.1** (signed, with `install.sh` + `SHA256SUMS`).
+> Pin it for reproducibility with `VW_VERSION=0.1.1` instead of `latest`.
 
 ## Usage
 
