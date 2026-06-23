@@ -134,6 +134,7 @@ Commands:
                       Guard an open vault (Spotlight off, TM exclude, cloud check).
                       --ttl D  auto-detach after D (e.g. 30m, 2h, 45s); --force
                       allows detaching even with open files (risk of data loss).
+  status              Show active sessions (read-only)
   stop <mount>        Restore everything and print a session report
   install-hooks       Wire vaultwatch into securetrash vault open/close
   uninstall-hooks     Remove vaultwatch hooks (only those it manages)
@@ -152,6 +153,7 @@ Commands:
                       Сторожить открытый vault (Spotlight off, TM exclude, cloud-чек).
                       --ttl D  авто-detach через D (напр. 30m, 2h, 45s); --force
                       форсирует detach при открытых файлах (риск потери данных).
+  status              Показать активные сессии (только чтение)
   stop <mount>        Восстановить всё и показать session report
   install-hooks       Подключить vaultwatch к securetrash vault open/close
   uninstall-hooks     Удалить хуки vaultwatch (только свои, managed)
@@ -219,6 +221,16 @@ EOF
     ru:rep_snap_some)    printf '  local snapshots: есть (%s) — addexclusion их НЕ удаляет (см. limitations)' "$1" ;;
     en:rep_swap)         echo '  swap:            NOT addressed (see limitations)' ;;
     ru:rep_swap)         echo '  swap:            не затрагивается (см. limitations)' ;;
+    en:status_no_sessions) echo 'vaultwatch: no active sessions.' ;;
+    ru:status_no_sessions) echo 'vaultwatch: нет активных сессий.' ;;
+    en:status_session)   printf 'session: %s' "$1" ;;
+    ru:status_session)   printf 'сессия: %s' "$1" ;;
+    en:status_spot)      printf '  Spotlight:     was %s before session — currently OFF' "$1" ;;
+    ru:status_spot)      printf '  Spotlight:     был %s до сессии — сейчас ВЫКЛ' "$1" ;;
+    en:status_tm)        echo   '  Time Machine:  excluded by this session' ;;
+    ru:status_tm)        echo   '  Time Machine:  исключён этой сессией' ;;
+    en:status_ttl)       printf '  TTL:           auto-exit in %s' "$1" ;;
+    ru:status_ttl)       printf '  TTL:           авто-выход через %s' "$1" ;;
     *) echo "$key" ;;
   esac
 }
@@ -597,6 +609,36 @@ cmd_ttl_fire() {
   cmd_stop "$mount"
 }
 
+cmd_status() {
+  require_macos
+  local sf mount started spot_was tm_added ttl_secs k v found=0
+  if [[ -d "$VW_STATE_DIR" ]]; then
+    for sf in "$VW_STATE_DIR"/*; do
+      [[ -f "$sf" ]] || continue
+      found=1
+      mount="" started=0 spot_was=unknown tm_added=0 ttl_secs=0
+      while IFS='=' read -r k v; do
+        case "$k" in
+          mount)         mount="$v" ;;
+          started)       started="$v" ;;
+          spotlight_was) spot_was="$v" ;;
+          tm_added)      tm_added="$v" ;;
+          ttl_secs)      ttl_secs="$v" ;;
+        esac
+      done < "$sf"
+      local now elapsed; now="$(date +%s)"; elapsed=$((now - started))
+      info "$(t status_session "$mount") (running $(_fmt_duration "$elapsed"))"
+      info "$(t status_spot "$spot_was")"
+      if [[ "$tm_added" == "1" ]]; then info "$(t status_tm)"; fi
+      if [[ "${ttl_secs:-0}" -gt 0 ]]; then
+        local remaining=$(( started + ttl_secs - now ))
+        if [[ "$remaining" -gt 0 ]]; then info "$(t status_ttl "$(_fmt_duration "$remaining")")"; fi
+      fi
+    done
+  fi
+  if [[ "$found" == "0" ]]; then info "$(t status_no_sessions)"; fi
+}
+
 cmd_version() { echo "vaultwatch $VERSION"; }
 
 main() {
@@ -608,6 +650,7 @@ main() {
     uninstall-hooks) cmd_uninstall_hooks "$@" ;;
     version|-v|--version) cmd_version "$@" ;;
     help|-h|--help)  usage ;;
+    status)          cmd_status "$@" ;;
     start)           cmd_start "$@" ;;
     stop)            cmd_stop "$@" ;;
     _ttl_fire)       cmd_ttl_fire "$@" ;;   # внутренняя: вызывается фоновым TTL-таймером

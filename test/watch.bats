@@ -164,3 +164,27 @@ run_vw() { run env PATH="$STUBS:$PATH" bash "$SCRIPT" "$@"; }
   [[ "$output" == *"restore"* ]] || [[ "$output" == *"восстан"* ]]
   [ -n "$(ls -A "$VW_STATE_DIR" 2>/dev/null)" ]
 }
+
+# --- status: read-only session view ---
+
+@test "status shows no sessions when nothing is running" {
+  run_vw status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no active"* ]] || [[ "$output" == *"нет активных"* ]]
+}
+
+@test "status shows active session after start" {
+  bash "$SCRIPT" start "$MOUNT" >/dev/null
+  run_vw status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$MOUNT"* ]]
+}
+
+@test "status makes no destructive calls" {
+  bash "$SCRIPT" start "$MOUNT" >/dev/null
+  : > "$VW_STUB_LOG"   # сбросить лог после start — проверяем только вызовы status
+  run_vw status
+  [ "$status" -eq 0 ]
+  ! grep -q "mdutil -i off" "$VW_STUB_LOG"
+  ! grep -q "removeexclusion" "$VW_STUB_LOG"
+}
