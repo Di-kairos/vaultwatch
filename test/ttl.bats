@@ -140,3 +140,19 @@ run_vw() { run env PATH="$STUBS:$PATH" bash "$SCRIPT" "$@"; }
   [ "$status" -eq 0 ]
   ! ls "$VW_LAUNCH_DIR"/com.vaultwatch.ttl.*.plist >/dev/null 2>&1
 }
+
+@test "ttl fire keeps session state when detach does not unmount the vault" {
+  bash "$SCRIPT" start --ttl 30m "$MOUNT" >/dev/null
+  STUB_LSOF_BUSY=0 STUB_DETACH_FAIL=1 run_vw _ttl_fire "$MOUNT"
+  [ "$status" -ne 0 ]
+  [ -n "$(ls -A "$VW_STATE_DIR" 2>/dev/null)" ]
+  [[ "$output" == *"detach"* ]]
+}
+
+@test "start --ttl warns and stores no label when launchd bootstrap fails" {
+  VW_NO_SPAWN=0 STUB_LAUNCHCTL_FAIL=1 run_vw start --ttl 30m "$MOUNT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bootstrap"* ]] || [[ "$output" == *"launchd"* ]]
+  run cat "$VW_STATE_DIR"/* 2>/dev/null
+  [[ "$output" != *"ttl_label=com.vaultwatch"* ]]
+}

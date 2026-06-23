@@ -156,3 +156,11 @@ run_vw() { run env PATH="$STUBS:$PATH" bash "$SCRIPT" "$@"; }
   [ "$status" -eq 0 ]
   [ -z "$(ls -A "$VW_STATE_DIR" 2>/dev/null)" ]
 }
+
+@test "stop warns and keeps state when Spotlight restore fails" {
+  STUB_SPOTLIGHT=enabled bash "$SCRIPT" start "$MOUNT" >/dev/null
+  STUB_MDUTIL_FAIL=1 run_vw stop "$MOUNT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"restore"* ]] || [[ "$output" == *"восстан"* ]]
+  [ -n "$(ls -A "$VW_STATE_DIR" 2>/dev/null)" ]
+}

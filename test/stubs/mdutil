@@ -8,7 +8,8 @@ case "${1:-}" in
     printf '%s:\n\tIndexing %s.\n' "${1:-/}" "${STUB_SPOTLIGHT:-enabled}"
     ;;
   -i)
-    # -i on|off <path> — просто фиксируем в логе (см. printf выше).
+    # STUB_MDUTIL_FAIL=1 симулирует сбой mdutil -i on (путь не существует после detach).
+    [[ "${STUB_MDUTIL_FAIL:-0}" == "1" ]] && exit 1
     :
     ;;
 esac

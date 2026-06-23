@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
-# Стаб hdiutil. Логирует вызов в $VW_STUB_LOG; всегда успех.
+# Стаб hdiutil. Логирует вызов в $VW_STUB_LOG.
+# detach: удаляет mountpoint из FS (имитирует реальный unmount), если не STUB_DETACH_FAIL=1.
 printf 'hdiutil %s\n' "$*" >>"${VW_STUB_LOG:-/dev/null}"
+if [[ "$1" == "detach" && "${STUB_DETACH_FAIL:-0}" != "1" ]]; then
+  _vw_mount="${@: -1}"
+  [[ -d "$_vw_mount" ]] && rm -rf "$_vw_mount"
+fi
 exit 0
