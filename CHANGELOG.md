@@ -5,6 +5,26 @@
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-06-24
+
+Релиз догоняет ассеты до исходников: команда `status` и hardening установщика/подписи,
+которые осели в `main` после тега `v0.1.1`, теперь попадают в публичный релиз.
+
+### Added
+- **`status`** — read-only обзор активных watch-сессий (что охраняется, с какого момента,
+  активный `--ttl`-таймер). Ни одного изменяющего вызова — безопасно звать в любой момент.
+
+### Fixed
+- **`stop`/`--ttl`:** результат `hdiutil detach` проверяется явно, а провал восстановления
+  (Spotlight/Time Machine) не теряется молча — попадает в session report.
+
+### Security
+- **install.sh fail-closed:** отсутствие `SHA256SUMS.sig` на релизе теперь прерывает
+  установку (обход для старых релизов — `ALLOW_UNSIGNED_LEGACY=1`); отсутствие `ssh-keygen`
+  больше не молчит, а громко предупреждает, что подпись не проверена (только целостность).
+- **Подпись релиза fail-closed:** `release.yml` прерывает выпуск (`exit 1`), если
+  `RELEASE_SIGNING_KEY` не задан, — неподписанный релиз невозможен.
+
 ## [0.1.1] — 2026-06-22
 
 ### Added
@@ -52,5 +72,7 @@
 - Real-device smoke на macOS: start/stop/`--ttl` на живом sparsebundle, launchd
   bootstrap/bootout-цикл, plist валиден (`plutil -lint`).
 
-[Unreleased]: https://github.com/Di-kairos/vaultwatch/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Di-kairos/vaultwatch/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Di-kairos/vaultwatch/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/Di-kairos/vaultwatch/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Di-kairos/vaultwatch/releases/tag/v0.1.0
