@@ -53,11 +53,16 @@ fi
 
 # --- Проверка ПОДПИСИ релиза (аутентичность поверх целостности) ---
 # Релизы подписаны выделенным ed25519-ключом экосистемы (ssh-keygen -Y). Pubkey вшит ниже.
-# Мягкая деградация (НЕ ломает установку): нет ssh-keygen → пропуск; у релиза нет .sig
-# (старый/неподписанный) → честное замечание, идём дальше (целостность уже проверена);
+# Поведение: нет ssh-keygen → громкое предупреждение (аутентичность не проверена, только
+# целостность); у релиза нет .sig → жёсткий отказ (legacy-обход через ALLOW_UNSIGNED_LEGACY=1);
 # .sig есть и НЕ сошёлся → жёсткий отказ (явный признак подмены).
 RELEASE_SIGNING_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICb2nz4EliRJIU0ExeF41klE/zlyo7XFY119mfzscn2U"
 SIGN_PRINCIPAL="releases@paranoid-tools"
+# pubkey задан, но ssh-keygen недоступен → НЕ молчим: аутентичность не проверена (только целостность).
+if [[ -n "$RELEASE_SIGNING_PUBKEY" ]] && ! command -v ssh-keygen >/dev/null 2>&1; then
+  echo "! ssh-keygen недоступен — подпись релиза НЕ проверена (только целостность по SHA256)." >&2
+  echo "  Установи openssh для проверки аутентичности или сверь подпись вручную (см. SECURITY.md)." >&2
+fi
 if [[ -n "$RELEASE_SIGNING_PUBKEY" ]] && command -v ssh-keygen >/dev/null 2>&1; then
   if curl -fsSL "${BASE_URL}/SHA256SUMS.sig" -o "${TMP}/SHA256SUMS.sig" 2>/dev/null; then
     printf '%s namespaces="file" %s\n' "$SIGN_PRINCIPAL" "$RELEASE_SIGNING_PUBKEY" > "${TMP}/allowed_signers"
@@ -70,7 +75,13 @@ if [[ -n "$RELEASE_SIGNING_PUBKEY" ]] && command -v ssh-keygen >/dev/null 2>&1; 
       exit 1
     fi
   else
-    echo "! Подпись для этого релиза недоступна — пропускаю (целостность по SHA256 проверена)."
+    if [[ "${ALLOW_UNSIGNED_LEGACY:-0}" == "1" ]]; then
+      echo "! Подпись недоступна — продолжаю (ALLOW_UNSIGNED_LEGACY=1, только для старых релизов)." >&2
+    else
+      echo "✗ Подпись релиза отсутствует — установка прервана." >&2
+      echo "  Релизы подписаны. Неподписанный/старый релиз: ALLOW_UNSIGNED_LEGACY=1 bash install.sh" >&2
+      exit 1
+    fi
   fi
 fi
 
