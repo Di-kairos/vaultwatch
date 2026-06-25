@@ -124,12 +124,12 @@ function T {
         'ru:status_ttl'    { return "  TTL:            авто-выход через $A" }
         'en:hooks_installed' { return "Hooks installed in $A (post-open, post-close)." }
         'ru:hooks_installed' { return "Хуки установлены в $A (post-open, post-close)." }
-        'en:hook_skip_foreign' { return "Skipped $A: exists and is not managed by vaultwatch (left untouched)." }
-        'ru:hook_skip_foreign' { return "Пропуск $A: существует и не управляется vaultwatch (не трогаю)." }
+        'en:hook_skip_foreign' { return "Skipped ${A}: exists and is not managed by vaultwatch (left untouched)." }
+        'ru:hook_skip_foreign' { return "Пропуск ${A}: существует и не управляется vaultwatch (не трогаю)." }
         'en:hooks_removed' { return "Removed managed hooks from $A." }
         'ru:hooks_removed' { return "Удалены managed-хуки из $A." }
-        'en:hook_skip_rm'  { return "Skipped $A: not managed by vaultwatch." }
-        'ru:hook_skip_rm'  { return "Пропуск $A: не управляется vaultwatch." }
+        'en:hook_skip_rm'  { return "Skipped ${A}: not managed by vaultwatch." }
+        'ru:hook_skip_rm'  { return "Пропуск ${A}: не управляется vaultwatch." }
         default            { return $Key }
     }
 }
