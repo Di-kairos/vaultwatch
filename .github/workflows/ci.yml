@@ -15,3 +15,19 @@ jobs:
         run: ./tools/vendor-common.sh --check
       - name: Unit tests
         run: bats test/
+
+  windows:
+    # Windows-порт (PowerShell, BETA): vaultwatch трогает Search/Task Scheduler/BitLocker/VSS,
+    # поэтому Pester проверяет оркестровку (state, TTL-планирование, restore, hooks) с
+    # замоканными системными примитивами.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Pester 5
+        shell: pwsh
+        run: Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck -MinimumVersion 5.0.0
+      - name: Pester (vaultwatch.ps1 orchestration + installer integrity gate)
+        shell: pwsh
+        run: |
+          $r = Invoke-Pester windows/test -Output Detailed -PassThru
+          if ($r.FailedCount -gt 0) { throw "$($r.FailedCount) Pester test(s) failed" }

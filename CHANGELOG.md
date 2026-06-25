@@ -5,6 +5,21 @@
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-06-25
+
+Первый выпуск с поддержкой Windows — завершает Windows-охват экосистемы (5/5).
+
+### Added
+- **Windows PowerShell port (beta):** `windows/vaultwatch.ps1` + `windows/install.ps1`.
+  `start [--ttl D] [--force] <mount>` исключает каталог из Windows Search (атрибут
+  `NotContentIndexed`), планирует авто-dismount через Task Scheduler (по истечении —
+  `Lock-BitLocker -ForceDismount`), проверяет cloud-демоны (OneDrive/Dropbox/Google Drive)
+  и репортит существующие VSS shadow copies. `stop` восстанавливает ровно изменённое и
+  печатает session report; `status` — активные сессии; `install-hooks`/`uninstall-hooks` —
+  managed `.cmd`-хуки. ЧЕСТНО: Windows не даёт чисто исключить backup из CLI, поэтому
+  snapshots только РЕПОРТЯТСЯ (не удаляются), pagefile не затрагивается. Pester покрывает
+  оркестровку с замоканными Search/Scheduler/BitLocker/VSS (windows-CI).
+
 ## [0.1.2] — 2026-06-24
 
 Релиз догоняет ассеты до исходников: команда `status` и hardening установщика/подписи,
