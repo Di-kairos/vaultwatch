@@ -7,13 +7,14 @@ An honest watchdog for an open vault — part of the [Paranoid Tools](https://gi
 [![CI](https://github.com/Di-kairos/vaultwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/Di-kairos/vaultwatch/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![platform](https://img.shields.io/badge/platform-macOS-blue)
+![windows](https://img.shields.io/badge/Windows-beta-orange)
 ![shellcheck](https://img.shields.io/badge/shellcheck-passing-brightgreen)
 
 `vaultwatch` is active **only while a vault is mounted**. It narrows the channels through
 which open plaintext can leak (Spotlight, Time Machine) and **restores everything on close**.
 It runs automatically from the `securetrash vault open/close` hooks.
 
-> **Status: early (v0.1.2, work in progress).** Done: integration (hooks + vendoring),
+> **Status: early (v0.1.3, work in progress).** Done: integration (hooks + vendoring),
 > the **watchdog core `start`/`stop`** (Spotlight off, Time Machine exclude, cloud-detect,
 > session report), and **auto-exit `--ttl`** via a **launchd LaunchAgent** (a managed timer,
 > visible in `launchctl list`, cleanly removed via bootout).
@@ -46,11 +47,11 @@ the hash **before** installing. Environment variables: `VW_VERSION` (pin a speci
 > `SHA256SUMS` published in the **same release** — it catches corruption and partial/cached
 > tampering. It does **not** by itself defeat an attacker who can rewrite *both* the binary
 > and its checksum at the source, nor does it prove *who* published them. For authenticity
-> you need a signature or Homebrew. Pin a version with `VW_VERSION=0.1.2` instead of `latest`
+> you need a signature or Homebrew. Pin a version with `VW_VERSION=0.1.3` instead of `latest`
 > for reproducibility.
 
-> The current public release is **v0.1.2** (signed, with `install.sh` + `SHA256SUMS`).
-> Pin it for reproducibility with `VW_VERSION=0.1.2` instead of `latest`.
+> The current public release is **v0.1.3** (signed, with `install.sh` + `SHA256SUMS`).
+> Pin it for reproducibility with `VW_VERSION=0.1.3` instead of `latest`.
 
 ## Usage
 
@@ -119,10 +120,14 @@ The core principle of the ecosystem: be honest about the limits. vaultwatch make
   descriptors. vaultwatch checks `lsof` and, when the volume is busy, **does not force** it —
   it warns honestly; `--force` (`detach -force`) only with confirmation and awareness of the risk.
 
-## Windows equivalent
+## Windows (beta)
 
-Planned: an equivalent via VSS (shadow copies), the Windows Search indexer, and
-pagefile/OneDrive control. The port comes second, as with securetrash.
+A PowerShell port now exists in [`windows/README.md`](windows/README.md). It mirrors the
+macOS logic, narrowing the same leak channels — VSS (shadow copies), the Windows Search
+indexer, and pagefile/OneDrive control — and restoring them on close.
+
+> **Beta:** the Windows port is logic-tested (Pester on CI) but not yet validated on real
+> Windows hardware. See [`windows/README.md`](windows/README.md).
 
 ## License
 
