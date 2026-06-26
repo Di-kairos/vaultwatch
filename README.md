@@ -131,5 +131,5 @@ indexer, and pagefile/OneDrive control — and restoring them on close.
 
 ## License
 
-[MIT](LICENSE). Security policy: [SECURITY.md](SECURITY.md). How to contribute:
+[MIT](LICENSE). Report security issues via [SECURITY.md](SECURITY.md); contributions via
 [CONTRIBUTING.md](CONTRIBUTING.md).
