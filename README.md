@@ -95,7 +95,7 @@ vaultwatch — session report
 ## Architecture
 
 - Single-file Bash, zero dependencies. Native macOS primitives.
-- The shared core (`lib/common.sh`) is **vendored** from securetrash inline, pinned to a
+- The shared core (`lib/common.sh`) is **vendored** inline from securetrash, pinned to a
   git-ref; `tools/vendor-common.sh --check` catches drift in CI. See `paranoid-tools/README.md`.
 
 ## Scope & limitations
