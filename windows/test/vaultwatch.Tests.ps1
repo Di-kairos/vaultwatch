@@ -189,7 +189,8 @@ Describe 'i18n + CLI' {
     }
     It 'prints the version (child pwsh)' {
         $out = & pwsh -NoProfile -File $script:ScriptPath version
-        ($out -join "`n") | Should -Match 'vaultwatch 0\.1\.3'
+        # version-agnostic: не привязываемся к конкретному номеру (иначе рвётся на каждом bump)
+        ($out -join "`n") | Should -Match 'vaultwatch \d+\.\d+\.\d+'
     }
     It 'exits non-zero on an unknown command (child pwsh)' {
         & pwsh -NoProfile -File $script:ScriptPath bogus *> $null
