@@ -5,6 +5,19 @@
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-06-27
+
+### Added
+- **Unmount-guard (macOS): авто-восстановление исключений при извлечении тома мимо `stop`.**
+  Раньше Finder-eject (или любой detach в обход securetrash post-close hook) оставлял
+  Spotlight-off и Time-Machine-exclusion висеть до следующего явного `vaultwatch stop`. Теперь
+  `start` регистрирует launchd-LaunchAgent с `WatchPaths` на mountpoint: когда том исчезает,
+  срабатывает `_guard_fire`, который запускает восстановление **только если том реально
+  размонтирован** (иначе WatchPaths дёрнулся на запись файла внутри — no-op). `stop` снимает
+  guard. Spotlight-restore при отсутствии тома — graceful skip (индексировать несуществующий
+  том не нужно; это не ошибка). Windows-порт без изменений (launchd-специфично; на Windows
+  по-прежнему явный `stop`/`vault close`).
+
 ## [0.1.4] — 2026-06-26
 
 ### Changed

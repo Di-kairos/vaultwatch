@@ -10,7 +10,7 @@
 # (см. README «Scope & limitations»). Полное ядро — в последующих паках.
 set -euo pipefail
 
-VERSION="0.1.4"
+VERSION="0.1.5"
 
 # === BEGIN vendored common (pin: 2e3d2dd5b36251bdcb1a8ffd348b63ece5fa7aab) ===
 # shellcheck shell=bash
@@ -197,6 +197,8 @@ EOF
     ru:ttl_detach_fail)   printf 'TTL: detach %s не удался — vault может быть открыт. Состояние сессии сохранено.' "$1" ;;
     en:ttl_sched_fail)    echo 'TTL: launchd bootstrap failed — auto-exit will NOT fire.' ;;
     ru:ttl_sched_fail)    echo 'TTL: ошибка launchd bootstrap — авто-выход НЕ сработает.' ;;
+    en:guard_sched_fail)  echo 'unmount-guard: launchd bootstrap failed — exclusions will NOT auto-restore if you eject the vault from Finder (run "vaultwatch stop" manually then).' ;;
+    ru:guard_sched_fail)  echo 'unmount-guard: ошибка launchd bootstrap — исключения НЕ восстановятся автоматически при извлечении тома из Finder (тогда запусти "vaultwatch stop" вручную).' ;;
     en:restore_spot_fail) printf 'Spotlight restore failed for %s — vault detached before stop. Re-mount and run vaultwatch stop.' "$1" ;;
     ru:restore_spot_fail) printf 'Spotlight не восстановлен для %s — vault размонтирован до stop. Перемонтируйте и запустите vaultwatch stop.' "$1" ;;
     en:restore_incomplete) printf 'Session state kept for %s — restore incomplete. Re-mount vault and run vaultwatch stop.' "$1" ;;
@@ -446,6 +448,61 @@ _ttl_remove() {
   rm -f "$plist"
 }
 
+# --- unmount-guard: авто-restore исключений, если том исчезает мимо `vaultwatch stop` ---
+# Зачем: Finder-eject (или любой detach в обход securetrash post-close hook) оставляет
+# Spotlight-off и Time-Machine-exclusion висеть до следующего явного stop. launchd WatchPaths
+# на mountpoint срабатывает при ЛЮБОМ изменении пути (вкл. его исчезновение при размонтаже),
+# вызывая `_guard_fire <mount>`. Тот рестартует restore ТОЛЬКО если том реально исчез (иначе
+# WatchPaths дёрнулся на запись файла внутри — no-op). WatchPaths, НЕ RunAtLoad: не палить на загрузке.
+_guard_label()      { printf 'com.vaultwatch.guard.%s' "$(printf '%s' "$1" | tr -c 'a-zA-Z0-9' '_')"; }
+_guard_plist_path() { printf '%s/%s.plist' "$VW_LAUNCH_DIR" "$(_guard_label "$1")"; }
+
+# Записать + загрузить guard-LaunchAgent; печатает Label (для записи в state).
+_guard_schedule() {
+  local mount="$1" label plist self dom
+  label="$(_guard_label "$mount")"
+  plist="$(_guard_plist_path "$mount")"
+  self="$(_self_path)"
+  mkdir -p "$VW_LAUNCH_DIR"
+  cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$(_xml_escape "$label")</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>exec "\$1" _guard_fire "\$2"</string>
+    <string>vaultwatch-guard</string>
+    <string>$(_xml_escape "$self")</string>
+    <string>$(_xml_escape "$mount")</string>
+  </array>
+  <key>WatchPaths</key>
+  <array><string>$(_xml_escape "$mount")</string></array>
+</dict>
+</plist>
+EOF
+  dom="$(_ttl_domain)"
+  launchctl bootout "$dom" "$plist" >/dev/null 2>&1 || true
+  if ! launchctl bootstrap "$dom" "$plist" >/dev/null 2>&1; then
+    warn "$(t guard_sched_fail)"
+    rm -f "$plist"
+    return 0   # не фатально: warn напечатан, пустой stdout → caller не пишет guard_label
+  fi
+  printf '%s' "$label"
+}
+
+# Снять guard-LaunchAgent. Идемпотентно.
+_guard_remove() {
+  local mount="$1" plist dom
+  plist="$(_guard_plist_path "$mount")"
+  dom="$(_ttl_domain)"
+  launchctl bootout "$dom" "$plist" >/dev/null 2>&1 || true
+  rm -f "$plist"
+}
+
 cmd_start() {
   require_macos
   local ttl_secs=0 ttl_force=0 raw=""
@@ -496,6 +553,13 @@ cmd_start() {
     printf 'ttl_label=%s\n' "$label" >> "$sf"
   fi
 
+  # unmount-guard: всегда (не только при TTL) — чтобы Finder-eject в обход stop тоже
+  # авто-восстановил исключения. VW_NO_SPAWN=1 подавляет реальную загрузку (юнит-тесты).
+  if [[ "${VW_NO_SPAWN:-0}" != "1" ]]; then
+    local glabel; glabel="$(_guard_schedule "$mount")"
+    [[ -n "$glabel" ]] && printf 'guard_label=%s\n' "$glabel" >> "$sf"
+  fi
+
   info "$(t watching "$mount")"
   [[ "$ttl_secs" -gt 0 ]] && info "$(t ttl_scheduled "$(_fmt_duration "$ttl_secs")")"
   _report_cloud_start "$mount"
@@ -536,12 +600,21 @@ cmd_stop() {
   # Снимаем launchd-таймер авто-выхода (vault закрыт вручную раньше TTL, либо
   # это вызов из самого _ttl_fire — bootout своего же job безопасен).
   [[ -n "$ttl_label" ]] && _ttl_remove "$mount"
+  # Снимаем unmount-guard БЕЗУСЛОВНО (не по guard_label): путь plist детерминирован от mount,
+  # поэтому unconditional bootout+rm идемпотентен и закрывает (а) гонку «guard загружен, но
+  # его label ещё не записан в state между bootstrap и printf», (б) любой stale-plist от
+  # предыдущего start. Включая случай, когда сам guard и вызвал этот stop (bootout своего же
+  # job безопасен, как и у TTL).
+  _guard_remove "$mount"
 
   # Восстанавливаем РОВНО то, что меняли. Проверяем результат: если не удалось —
   # сохраняем state file для повторного восстановления после перемонтирования vault.
   local restore_ok=1
   if [[ "$spot_was" == "enabled" ]]; then
-    if ! mdutil -i on "$mount" >/dev/null 2>&1; then
+    if [[ ! -d "$mount" ]]; then
+      : # том размонтирован (напр. Finder-eject + guard) — индексировать НЕЧЕГО, restore N/A,
+        # это НЕ ошибка: настройка Spotlight относится к несуществующему тому. Чистим сессию.
+    elif ! mdutil -i on "$mount" >/dev/null 2>&1; then
       warn "$(t restore_spot_fail "$mount")"
       restore_ok=0
     fi
@@ -609,6 +682,19 @@ cmd_ttl_fire() {
   cmd_stop "$mount"
 }
 
+# Внутренняя команда: срабатывает по launchd WatchPaths при изменении mountpoint.
+# WatchPaths палит на ЛЮБОЕ изменение пути (вкл. запись файла внутри открытого тома),
+# поэтому restore запускаем ТОЛЬКО когда том реально исчез (размонтирован). Иначе — no-op.
+cmd_guard_fire() {
+  require_macos
+  local raw="${1:-}"; [[ -n "$raw" ]] || return 0
+  local mount; mount="$(_abspath "$raw" 2>/dev/null || printf '%s' "$raw")"
+  # Том всё ещё смонтирован → WatchPaths дёрнулся на изменение содержимого, не на eject. Тихо выходим.
+  [[ -d "$mount" ]] && return 0
+  # Том исчез (Finder-eject / detach мимо stop) → восстанавливаем исключения и чистим сессию.
+  cmd_stop "$mount"
+}
+
 cmd_status() {
   require_macos
   local sf mount started spot_was tm_added ttl_secs k v found=0
@@ -654,6 +740,7 @@ main() {
     start)           cmd_start "$@" ;;
     stop)            cmd_stop "$@" ;;
     _ttl_fire)       cmd_ttl_fire "$@" ;;   # внутренняя: вызывается фоновым TTL-таймером
+    _guard_fire)     cmd_guard_fire "$@" ;; # внутренняя: вызывается launchd WatchPaths при размонтаже
     *) t unknown_cmd "$cmd" >&2; echo >&2; usage >&2; exit 1 ;;
   esac
 }

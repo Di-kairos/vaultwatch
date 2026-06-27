@@ -77,6 +77,14 @@ the TTL) tears the LaunchAgent down (`bootout` + plist removal).
 `start` changed** (if Spotlight was already off, or the vault was already excluded from Time
 Machine before the session, `stop` leaves that as-is) and prints a session report.
 
+**Unmount-guard (macOS).** Ejecting the vault from Finder (or any detach that bypasses
+`vaultwatch stop` / securetrash's post-close hook) would otherwise leave the exclusions
+hanging until the next explicit `stop`. `start` also registers a launchd LaunchAgent with
+`WatchPaths` on the mountpoint (`com.vaultwatch.guard.*.plist`); when the volume disappears it
+fires `vaultwatch _guard_fire`, which restores everything **only if the mount is truly gone**
+(a `WatchPaths` hit from a write inside the still-mounted vault is a no-op). `stop` removes the
+guard. On Windows this is not automated — use an explicit `stop` / `securetrash vault close`.
+
 Hooks are placed in `${ST_HOOK_DIR:-~/.securetrash/hooks}` — the same directory `securetrash`
 reads. vaultwatch does not touch foreign (non-managed) hooks.
 
