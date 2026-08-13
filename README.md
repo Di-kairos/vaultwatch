@@ -1,3 +1,5 @@
+> **📦 Moved:** development continues in the [paranoid-tools monorepo](https://github.com/Di-kairos/paranoid-tools) (`vaultwatch/` directory, full history preserved). This repository is archived: its published releases stay downloadable and the installers keep working, but new issues, PRs and releases happen in the monorepo.
+
 **English** · [Русский](README.ru.md)
 
 # vaultwatch
